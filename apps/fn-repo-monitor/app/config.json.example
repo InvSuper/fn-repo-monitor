@@ -3,7 +3,8 @@
   "interval_hours": 24,
   "github_token": "",
   "serverchan": {
-    "sendkey": "在这里填你的Server酱SendKey，sctp或SCT开头均可"
+    "sendkey": "",
+    "_sendkey_help": "填 Server酱 SendKey，sctp 或 SCT 开头，例如 sctp123tabcdef 或 SCT123456Tabcdef"
   },
   "ai": {
     "enabled": true,

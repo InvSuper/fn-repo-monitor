@@ -1,0 +1,21 @@
+[
+  {
+    "stepTitle": "卸载选项",
+    "items": [
+      {
+        "type": "radio",
+        "field": "wizard_action",
+        "label": "数据处理",
+        "initValue": "keep",
+        "options": [
+          { "label": "保留数据（推荐）", "value": "keep" },
+          { "label": "删除所有数据", "value": "delete" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "保留数据将保存监控配置、上游基线记录和日志，重新安装后可继续使用。"
+      }
+    ]
+  }
+]

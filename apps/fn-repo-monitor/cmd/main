@@ -1,30 +1,79 @@
 #!/bin/bash
 # 飞牛应用生命周期：start / stop / status
-APP_DIR="$TRIM_APPDEST"
-PID_FILE="$APP_DIR/monitor.pid"
-PY="${PYTHON:-python3}"
+APP_DIR="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+# 持久化数据目录（升级不丢失配置与状态）
+DATA_DIR="${FN_MONITOR_DATA:-}"
+if [ -z "$DATA_DIR" ]; then
+    if [ -n "$TRIM_APPDATA" ]; then
+        DATA_DIR="$TRIM_APPDATA"
+    elif [ -n "$TRIM_APPNAME" ] && [ -d "/var/apps/$TRIM_APPNAME" ]; then
+        DATA_DIR="/var/apps/$TRIM_APPNAME/var"
+    else
+        DATA_DIR="$APP_DIR"
+    fi
+fi
+mkdir -p "$DATA_DIR" 2>/dev/null
+
+PID_FILE="$DATA_DIR/monitor.pid"
+STDOUT_LOG="$DATA_DIR/monitor.stdout.log"
+
+find_python() {
+    if [ -n "$PYTHON" ] && command -v "$PYTHON" >/dev/null 2>&1; then
+        command -v "$PYTHON"; return 0
+    fi
+    for c in python3 python; do
+        if command -v "$c" >/dev/null 2>&1; then
+            command -v "$c"; return 0
+        fi
+    done
+    return 1
+}
 
 start() {
     if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        echo "already running"
+        echo "already running (pid $(cat "$PID_FILE"))"
         exit 0
     fi
-    cd "$APP_DIR"
-    # 首次运行若没有 config.json，从 example 复制一份
-    if [ ! -f "$APP_DIR/config.json" ]; then
-        cp "$APP_DIR/config.json.example" "$APP_DIR/config.json" 2>/dev/null
+
+    PY="$(find_python)"
+    if [ -z "$PY" ]; then
+        echo "错误：系统中未找到 python3，无法启动监控" | tee "${TRIM_TEMP_LOGFILE:-/dev/null}"
+        exit 1
     fi
-    nohup "$PY" "$APP_DIR/src/monitor.py" >> "$APP_DIR/monitor.stdout.log" 2>&1 &
+
+    echo "python: $PY"
+    echo "app dir: $APP_DIR"
+    echo "data dir: $DATA_DIR"
+
+    # 首次运行生成配置文件
+    if [ ! -f "$DATA_DIR/config.json" ] && [ -f "$APP_DIR/config.json.example" ]; then
+        cp "$APP_DIR/config.json.example" "$DATA_DIR/config.json" 2>/dev/null
+        echo "已生成配置文件: $DATA_DIR/config.json"
+    fi
+
+    export FN_MONITOR_DATA="$DATA_DIR"
+    nohup "$PY" "$APP_DIR/src/monitor.py" >> "$STDOUT_LOG" 2>&1 &
     echo $! > "$PID_FILE"
-    echo "started pid $(cat "$PID_FILE")"
-    exit 0
+    sleep 1
+    if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "started pid $(cat "$PID_FILE")"
+        exit 0
+    else
+        echo "启动失败，请查看日志: $STDOUT_LOG" | tee "${TRIM_TEMP_LOGFILE:-/dev/null}"
+        exit 1
+    fi
 }
 
 stop() {
     if [ -f "$PID_FILE" ]; then
         kill "$(cat "$PID_FILE")" 2>/dev/null
+        sleep 1
+        kill -9 "$(cat "$PID_FILE")" 2>/dev/null
         rm -f "$PID_FILE"
     fi
+    # 兜底：清理残留进程
+    pkill -f "$APP_DIR/src/monitor.py" 2>/dev/null
     exit 0
 }
 

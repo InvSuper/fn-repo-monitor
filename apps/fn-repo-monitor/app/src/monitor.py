@@ -9,6 +9,7 @@
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -18,11 +19,36 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
-# 应用目录（飞牛环境由 TRIM_APPDEST 注入，本地测试回退到脚本所在目录）
+# 代码目录（飞牛环境由 TRIM_APPDEST 注入，本地测试回退到脚本所在目录）
 APP_DIR = Path(os.environ.get("TRIM_APPDEST", Path(__file__).resolve().parent.parent))
-CONFIG_PATH = APP_DIR / "config.json"
-STATE_DIR = APP_DIR / "state"
-LOG_PATH = APP_DIR / "monitor.log"
+
+
+def resolve_data_dir():
+    """配置/状态/日志放在持久目录，升级应用不丢失。"""
+    candidates = []
+    if os.environ.get("FN_MONITOR_DATA"):
+        candidates.append(Path(os.environ["FN_MONITOR_DATA"]))
+    if os.environ.get("TRIM_APPDATA"):
+        candidates.append(Path(os.environ["TRIM_APPDATA"]))
+    appname = os.environ.get("TRIM_APPNAME")
+    if appname:
+        candidates.append(Path("/var/apps") / appname / "var")
+    candidates.append(APP_DIR)
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            if c.is_dir() and os.access(c, os.W_OK):
+                return c
+        except Exception:
+            continue
+    return APP_DIR
+
+
+DATA_DIR = resolve_data_dir()
+CONFIG_PATH = DATA_DIR / "config.json"
+STATE_DIR = DATA_DIR / "state"
+LOG_PATH = DATA_DIR / "monitor.log"
+CONFIG_EXAMPLE = APP_DIR / "config.json.example"
 
 MAX_LOG_LINES = 2000
 
@@ -44,7 +70,12 @@ def log(msg):
 
 def load_config():
     if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
+        # 首次运行：从模板生成配置，并提示用户填写
+        if CONFIG_EXAMPLE.exists():
+            CONFIG_PATH.write_text(CONFIG_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+            log(f"[配置] 已生成默认配置文件: {CONFIG_PATH}，请填写 Server酱 SendKey 后重启应用")
+        else:
+            raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
     with open(CONFIG_PATH, encoding="utf-8-sig") as f:
         return json.load(f)
 
@@ -169,17 +200,15 @@ def ai_analyze(repo_name, summary, base, head, ai_conf):
 
 
 def send_serverchan(title, desp, sendkey):
-    if not sendkey:
-        log("[Server酱] 未配置 sendkey，跳过推送")
+    sendkey = (sendkey or "").strip()
+    # SendKey 格式校验：sctp{uid}t{token} 或 SCT{uid}t{token}
+    if not re.match(r"^(?:sctp|SCT)\d+[tT]\w+$", sendkey):
+        log("[Server酱] 未配置有效的 SendKey，跳过推送（请在 config.json 填入 sctp 或 SCT 开头的 SendKey）")
         return False
     data = urllib.parse.urlencode({"title": title, "desp": desp}).encode("utf-8")
     if sendkey.startswith("sctp"):
         # Server酱³: sctp{uid}t{secret}
-        uid = ""
-        for ch in sendkey[4:]:
-            if ch == "t":
-                break
-            uid += ch
+        uid = re.match(r"^sctp(\d+)t", sendkey).group(1)
         url = f"https://{uid}.push.ft07.com/send/{sendkey}.send"
     else:
         url = f"https://sctapi.ftqq.com/{sendkey}.send"
