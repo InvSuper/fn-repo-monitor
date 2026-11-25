@@ -51,6 +51,8 @@ function statusBadge(repo) {
       return { cls: "ok", text: "无更新" };
     case "first_run":
       return { cls: "idle", text: "已建基线" };
+    case "skipped":
+      return { cls: "idle", text: "无相关更新" };
     case "updated": {
       const label = repo.watch === "release" ? "新版本" : "有更新";
       return { cls: "warn", text: repo.suggestion ? `${label} · ${repo.suggestion}` : label };
@@ -105,7 +107,7 @@ function renderRepoList(repos) {
     sub.className = "repo-sub";
     const mode = repo.watch === "release" ? "仅正式版" : "任意提交";
     const source = repo.watch === "release" ? repo.upstream : `${repo.upstream} @ ${repo.branch}`;
-    sub.textContent = `${source} · ${mode} · 基线 ${formatBaseline(repo.baseline)}`;
+    sub.textContent = `${source} · ${mode} · 基线 ${formatBaseline(repo.baseline)}${repo.keyword_only ? " · 关键词过滤" : ""}`;
     sub.title = "基线是上次检测到的上游状态；首次检测只记录基线，之后与它比较才判断是否有更新";
 
     main.appendChild(nameRow);
@@ -232,6 +234,20 @@ function createSelect(labelText, value, dataField, options) {
   return label;
 }
 
+function createCheck(labelText, checked, dataField) {
+  const label = document.createElement("label");
+  label.className = "field check-field";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = Boolean(checked);
+  input.dataset.field = dataField;
+  const span = document.createElement("span");
+  span.textContent = labelText;
+  label.appendChild(input);
+  label.appendChild(span);
+  return label;
+}
+
 function addRepoRow(repo = {}) {
   const row = document.createElement("div");
   row.className = "repo-row";
@@ -266,6 +282,7 @@ function addRepoRow(repo = {}) {
     ["release", "仅正式版 Release"],
   ]));
   grid.appendChild(createField("关键词（逗号分隔，可留空）", (repo.keywords || []).join(", "), "src, config, docs", "keywords"));
+  grid.appendChild(createCheck("仅关键词命中时推送", repo.keyword_only === true, "keyword_only"));
   grid.appendChild(createField("编译跳转链接（可留空）", repo.build_url, "https://github.com/.../actions", "build_url"));
 
   row.appendChild(head);
@@ -321,12 +338,14 @@ function collectConfig() {
     const known = (state.status && state.status.repos ? state.status.repos : []).find(
       (item) => item.name === name && item.upstream === upstream
     );
+    const keywordOnly = row.querySelector('[data-field="keyword_only"]');
     return {
       name,
       upstream,
       branch: get("branch").trim() || "main",
       watch: get("watch") || "commit",
       enabled: known ? known.enabled !== false : row.dataset.enabled !== "false",
+      keyword_only: keywordOnly ? keywordOnly.checked : false,
       keywords: get("keywords")
         .split(/[,，]/)
         .map((k) => k.trim())

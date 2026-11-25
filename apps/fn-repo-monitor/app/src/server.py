@@ -24,7 +24,7 @@ import monitor
 
 MAX_BODY = 1024 * 1024  # 单次请求体上限 1MB
 STARTED_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-APP_VERSION = os.environ.get("TRIM_APPVER", "1.5.0")
+APP_VERSION = os.environ.get("TRIM_APPVER", "1.6.0")
 WEB_DIR = monitor.APP_DIR / "ui"
 STOP_EVENT = threading.Event()
 
@@ -91,12 +91,16 @@ def normalize_config(raw):
         enabled = item.get("enabled", True)
         if isinstance(enabled, str):
             enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
+        keyword_only = item.get("keyword_only", False)
+        if isinstance(keyword_only, str):
+            keyword_only = keyword_only.strip().lower() not in ("false", "0", "no", "off", "")
         normalized_repos.append({
             "name": name,
             "upstream": upstream,
             "branch": str(item.get("branch", "main")).strip() or "main",
             "watch": watch,
             "enabled": bool(enabled),
+            "keyword_only": bool(keyword_only),
             "keywords": [str(k).strip() for k in keywords if str(k).strip()],
             "build_url": str(item.get("build_url", "")).strip(),
         })
@@ -139,6 +143,7 @@ def build_status():
             "branch": repo.get("branch", "main"),
             "watch": repo.get("watch", "commit"),
             "enabled": repo.get("enabled", True) is not False,
+            "keyword_only": repo.get("keyword_only", False) is True,
             "baseline": read_baseline(name),
             "checking": bool(entry.get("checking")),
             "last_check_at": entry.get("last_check_at", ""),

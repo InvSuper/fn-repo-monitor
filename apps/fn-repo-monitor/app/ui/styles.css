@@ -167,6 +167,9 @@ html, body {
 .badge.err { background: #fef2f2; color: var(--danger); border-color: #fecaca; }
 .badge.run { background: #eff6ff; color: var(--primary); border-color: #bfdbfe; }
 
+.check-field { flex-direction: row !important; align-items: center; gap: 8px; cursor: pointer; }
+.check-field input { width: 15px; height: 15px; margin: 0; }
+.check-field span { font-size: 13px; color: var(--text); }
 .repo-meta { font-size: 12px; color: var(--muted); text-align: right; }
 .repo-meta .update { color: var(--warning); font-weight: 600; }
 .repo-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }

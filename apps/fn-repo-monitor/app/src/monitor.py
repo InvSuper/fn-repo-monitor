@@ -251,18 +251,22 @@ def summarize_diff(compare, keywords):
         else:
             other_files.append(fn)
     commit_lines = []
-    for c in commits[:15]:
+    commit_texts = []
+    for c in commits:
         sha = c["sha"][:10]
         msg = c["commit"]["message"].split("\n")[0]
-        author = c["commit"]["author"]["name"]
-        date = c["commit"]["author"]["date"][:16].replace("T", " ")
-        commit_lines.append(f"[{sha}] {msg}  ({author}, {date})")
+        commit_texts.append(f"{sha} {msg}")
+        if len(commit_lines) < 15:
+            author = c["commit"]["author"]["name"]
+            date = c["commit"]["author"]["date"][:16].replace("T", " ")
+            commit_lines.append(f"[{sha}] {msg}  ({author}, {date})")
     return {
         "total_commits": len(commits),
         "total_files": len(files),
         "key_files": key_files,
         "other_files": other_files,
         "commits": commit_lines,
+        "commit_texts": commit_texts,
     }
 
 
@@ -354,7 +358,21 @@ def _call_ai(prompt, ai_conf, retries=2):
         raise AIError(f"返回内容解析失败：{e}")
 
 
-def ai_analyze(repo_name, summary, base, head, ai_conf):
+def keyword_hit(summary, keywords):
+    """判断变更是否命中关键词：文件路径或提交标题任一命中即可。"""
+    kw = [str(k).strip().lower() for k in (keywords or []) if str(k).strip()]
+    if not kw:
+        return True
+    if summary.get("key_files"):
+        return True
+    for commit in summary.get("commit_texts") or summary.get("commits", []):
+        text = str(commit).lower()
+        if any(k in text for k in kw):
+            return True
+    return False
+
+
+def ai_analyze(repo_name, summary, base, head, ai_conf, keywords=None):
     """调用 AI 解读提交变更，返回解读文本 + 是否建议更新"""
     if not _ai_available(ai_conf):
         return None, None
@@ -362,9 +380,12 @@ def ai_analyze(repo_name, summary, base, head, ai_conf):
     files_text = "\n".join(summary["key_files"] + summary["other_files"][:15])
     commits_text = "\n".join(summary["commits"])
     diff_url = f"https://github.com/{repo_name}/compare/{base}...{head}"
+    focus = ""
+    if keywords:
+        focus = f"\n用户重点关注：{', '.join(str(k) for k in keywords)}。请优先说明本次变更是否影响这些方向。\n"
 
     prompt = f"""你是开源项目维护助手。下面是仓库 {repo_name} 的上游更新（{base[:10]} → {head[:10]}）。
-
+{focus}
 提交记录：
 {commits_text}
 
@@ -396,16 +417,19 @@ def ai_analyze(repo_name, summary, base, head, ai_conf):
     return text, _parse_ai_meta(text)
 
 
-def ai_analyze_release(repo_name, release, ai_conf):
+def ai_analyze_release(repo_name, release, ai_conf, keywords=None):
     """调用 AI 解读正式版发布说明。"""
     if not _ai_available(ai_conf):
         return None, None
 
     published = (release.get("published_at") or "")[:10]
     body = (release.get("body") or "").strip()[:6000] or "（发布说明为空）"
+    focus = ""
+    if keywords:
+        focus = f"\n用户重点关注：{', '.join(str(k) for k in keywords)}。请优先说明这个版本是否影响这些方向。\n"
 
     prompt = f"""你是开源项目维护助手。下面是仓库 {repo_name} 的正式版发布说明（{release['tag']}，{published}）。
-
+{focus}
 {body}
 
 请分析：
@@ -530,7 +554,7 @@ def build_message(repo_conf, summary, ai_text, ai_meta, base, head):
     return "\n".join(lines)
 
 
-def build_release_message(repo_conf, release, ai_text, ai_meta):
+def build_release_message(repo_conf, release, ai_text, ai_meta, summary=None, prev_tag=""):
     lines = []
     if ai_meta:
         sug = ai_meta.get("suggestion", "可以暂缓")
@@ -550,6 +574,10 @@ def build_release_message(repo_conf, release, ai_text, ai_meta):
         lines.append(f"版本名称：{release['name']}")
     if release.get("published_at"):
         lines.append(f"发布时间：{release['published_at'][:10]}")
+    if prev_tag:
+        lines.append(f"范围：`{prev_tag}` → `{release['tag']}`")
+    if summary is not None:
+        lines.append(f"统计：{summary['total_commits']} commits / {summary['total_files']} files")
     lines.append("")
 
     body = (release.get("body") or "").strip()
@@ -561,6 +589,20 @@ def build_release_message(repo_conf, release, ai_text, ai_meta):
             lines.append("（发布说明较长，已截断，完整内容见下方链接）")
         lines.append("")
 
+    if summary and summary.get("key_files"):
+        lines.append("### 🎯 相关变更")
+        lines.append("```")
+        for f in summary["key_files"][:15]:
+            lines.append(f)
+        lines.append("```")
+        lines.append("")
+
+    if summary and summary.get("commits"):
+        lines.append("### 📝 提交记录")
+        for c in summary["commits"][:10]:
+            lines.append(f"- {c}")
+        lines.append("")
+
     if ai_text:
         lines.append("### 🤖 AI 解读")
         lines.append(ai_text)
@@ -568,6 +610,9 @@ def build_release_message(repo_conf, release, ai_text, ai_meta):
 
     lines.append("### 🔗 链接")
     lines.append(f"- [Release 页面]({release.get('url', '')})")
+    if summary is not None and prev_tag:
+        diff_url = f"https://github.com/{repo_conf['upstream']}/compare/{prev_tag}...{release['tag']}"
+        lines.append(f"- [版本间完整 Diff]({diff_url})")
     build_url = repo_conf.get("build_url", "")
     if build_url:
         lines.append(f"- [👉 去同步/编译]({build_url})")
@@ -641,18 +686,51 @@ def check_release_repo(repo_conf, config):
 
     prev_tag = last[len("release:"):]
     log(f"[{name}] 发现新正式版: {prev_tag} -> {tag}")
-    ai_text, ai_meta = ai_analyze_release(upstream, release, config.get("ai"))
+
+    keywords = repo_conf.get("keywords", [])
+    summary = None
+    try:
+        compare = get_compare(upstream, prev_tag, tag, token)
+        summary = summarize_diff(compare, keywords)
+    except Exception as e:
+        log(f"[{name}] 获取 {prev_tag}...{tag} 差异失败: {e}，回退到发布说明")
+
+    if repo_conf.get("keyword_only"):
+        if summary is not None:
+            hit = keyword_hit(summary, keywords)
+        else:
+            body = (release.get("body") or "").lower()
+            kw = [str(k).strip().lower() for k in keywords if str(k).strip()]
+            hit = not kw or not body or any(k in body for k in kw)
+            if not body:
+                log(f"[{name}] 无法获取差异且发布说明为空，无法过滤关键词，仍推送")
+        if not hit:
+            sp.write_text(marker)
+            log(f"[{name}] 未命中关键词，跳过推送（基线已更新）")
+            return {
+                "result": "skipped",
+                "message": f"{prev_tag} → {tag} 无关键词相关变更，已跳过推送",
+                "has_update": False,
+                "sha": tag,
+            }
+
+    if summary is not None:
+        ai_text, ai_meta = ai_analyze(upstream, summary, prev_tag, tag, config.get("ai"), keywords)
+    else:
+        ai_text, ai_meta = ai_analyze_release(upstream, release, config.get("ai"), keywords)
 
     title = f"🚀 {name} 发布 {tag}"
     if ai_meta and ai_meta.get("suggestion") == "建议更新":
         title = f"🟢 {name} {tag} 建议同步（{ai_meta.get('urgency','中')}）"
-    desp = build_release_message(repo_conf, release, ai_text, ai_meta)
+    desp = build_release_message(repo_conf, release, ai_text, ai_meta, summary, prev_tag)
 
     push_ok = send_serverchan(title, desp, config.get("serverchan", {}).get("sendkey", ""))
     sp.write_text(marker)
     log(f"[{name}] 正式版处理完成")
 
     detail = f"{prev_tag} → {tag}"
+    if summary is not None:
+        detail += f"，{summary['total_commits']} commits / {summary['total_files']} files"
     if ai_meta:
         detail += f"，建议：{ai_meta.get('suggestion')}"
     if not push_ok:
@@ -720,7 +798,17 @@ def check_commit_repo(repo_conf, config):
         log(f"[{name}] 获取 diff 失败: {e}，仅推送基础信息")
         summary = {"total_commits": 0, "total_files": 0, "key_files": [], "other_files": [], "commits": [latest["message"]]}
 
-    ai_text, ai_meta = ai_analyze(upstream, summary, last, sha, config.get("ai"))
+    if repo_conf.get("keyword_only") and not keyword_hit(summary, keywords):
+        sp.write_text(sha)
+        log(f"[{name}] 未命中关键词，跳过推送（基线已更新）")
+        return {
+            "result": "skipped",
+            "message": f"无关键词相关变更（{summary['total_commits']} commits），已跳过推送",
+            "has_update": False,
+            "sha": sha,
+        }
+
+    ai_text, ai_meta = ai_analyze(upstream, summary, last, sha, config.get("ai"), keywords)
 
     title = f"🔔 {name} 上游更新"
     if ai_meta and ai_meta.get("suggestion") == "建议更新":
