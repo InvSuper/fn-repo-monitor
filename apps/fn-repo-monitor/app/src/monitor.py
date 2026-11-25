@@ -264,7 +264,7 @@ def _parse_ai_meta(text):
     return {"suggestion": suggestion, "urgency": urgency}
 
 
-def _call_ai(prompt, ai_conf):
+def _call_ai(prompt, ai_conf, retries=2):
     api_base = ai_conf.get("api_base", "https://api.deepseek.com/v1").rstrip("/")
     model = ai_conf.get("model", "deepseek-chat")
     payload = json.dumps({
@@ -277,28 +277,53 @@ def _call_ai(prompt, ai_conf):
     req = urllib.request.Request(f"{api_base}/chat/completions", data=payload)
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", f"Bearer {str(ai_conf.get('api_key', '')).strip()}")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        detail = ""
+
+    attempt = 0
+    while True:
         try:
-            detail = e.read().decode("utf-8", "replace").strip()
-        except Exception:
-            pass
-        message = f"HTTP {e.code} {e.reason}"
-        if detail:
-            message = f"{message}：{detail[:300]}"
-        log(f"[AI] 调用失败: {message}")
-        raise AIError(message)
-    except urllib.error.URLError as e:
-        message = f"网络连接失败：{e.reason}"
-        log(f"[AI] 调用失败: {message}")
-        raise AIError(message)
-    except Exception as e:
-        message = f"{type(e).__name__}：{e}"
-        log(f"[AI] 调用失败: {message}")
-        raise AIError(message)
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+            break
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", "replace").strip()
+            except Exception:
+                pass
+            message = f"HTTP {e.code} {e.reason}"
+            if detail:
+                message = f"{message}：{detail[:300]}"
+            retry_after = 0
+            try:
+                header = e.headers.get("Retry-After") if e.headers else None
+                if header:
+                    retry_after = int(str(header).strip())
+            except Exception:
+                retry_after = 0
+            if e.code == 429 and retry_after:
+                message = f"{message}（建议 {retry_after} 秒后重试）"
+            if e.code in (429, 500, 502, 503, 504) and attempt < retries:
+                wait = retry_after if retry_after > 0 else min(30, 5 * (attempt + 1))
+                log(f"[AI] 调用失败({message})，{wait} 秒后重试（{attempt + 1}/{retries}）")
+                time.sleep(wait)
+                attempt += 1
+                continue
+            log(f"[AI] 调用失败: {message}")
+            raise AIError(message)
+        except urllib.error.URLError as e:
+            message = f"网络连接失败：{e.reason}"
+            log(f"[AI] 调用失败: {message}")
+            raise AIError(message)
+        except Exception as e:
+            if attempt < retries and isinstance(e, (TimeoutError, OSError)):
+                wait = min(30, 5 * (attempt + 1))
+                log(f"[AI] 调用超时或连接中断，{wait} 秒后重试（{attempt + 1}/{retries}）")
+                time.sleep(wait)
+                attempt += 1
+                continue
+            message = f"{type(e).__name__}：{e}"
+            log(f"[AI] 调用失败: {message}")
+            raise AIError(message)
 
     try:
         data = json.loads(raw)
@@ -390,7 +415,7 @@ def test_ai_connection(ai_conf):
     if not str((ai_conf or {}).get("api_key", "")).strip():
         return False, "请先填写 AI API Key"
     try:
-        text = _call_ai("这是一次连接测试。请只回复：AI 连接正常", ai_conf or {})
+        text = _call_ai("这是一次连接测试。请只回复：AI 连接正常", ai_conf or {}, retries=0)
     except AIError as e:
         message = str(e)
         if "HTTP 401" in message:
@@ -400,7 +425,11 @@ def test_ai_connection(ai_conf):
         if "HTTP 404" in message:
             return False, f"接口地址或模型名称不正确（{message}）"
         if "HTTP 429" in message:
-            return False, f"请求过于频繁或额度用尽，请稍后再试（{message}）"
+            if "1305" in message:
+                return False, f"免费模型当前访问量过大，请稍后再试或换用其他免费模型（{message}）"
+            if "1302" in message:
+                return False, f"账户触发速率限制，免费模型并发较低，请等 1 分钟后重试；检测正在运行时也不要点测试（{message}）"
+            return False, f"请求被限流，请稍后重试（{message}）"
         return False, message
     if not text:
         return False, "接口返回了空内容"
