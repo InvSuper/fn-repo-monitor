@@ -5,3 +5,4 @@ monitor.stdout.log
 monitor.pid
 *.pyc
 __pycache__/
+icon_source.jpg

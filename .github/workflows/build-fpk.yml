@@ -30,8 +30,17 @@ jobs:
       - name: Build FPK
         run: |
           cd apps/fn-repo-monitor
-          fnpack build 2>&1 || { echo "fnpack build failed, trying without args"; fnpack --help; exit 1; }
-          ls -la *.fpk 2>/dev/null || find . -name '*.fpk'
+          rm -f *.fpk
+          # fnpack 打包失败时也会返回 0，必须显式校验产物
+          fnpack build > /tmp/fnpack-build.log 2>&1 || true
+          echo "===== fnpack 输出 ====="
+          cat /tmp/fnpack-build.log
+          echo "======================="
+          if [ ! -f fn-repo-monitor.fpk ]; then
+            echo "::error::fnpack 未生成 fn-repo-monitor.fpk，打包失败（详见上方日志）"
+            exit 1
+          fi
+          ls -lh fn-repo-monitor.fpk
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
