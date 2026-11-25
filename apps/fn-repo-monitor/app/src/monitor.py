@@ -6,18 +6,21 @@
 - AI 解读变更内容与影响
 - 判断是否建议更新固件/客户端
 - 推送到 Server酱，带手动编译跳转链接
+
+本模块既可作为命令行入口独立运行，也可被 server.py 导入复用。
 """
 import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.request
 import urllib.parse
 import urllib.error
 import traceback
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 代码目录（飞牛环境由 TRIM_APPDEST 注入，本地测试回退到脚本所在目录）
 APP_DIR = Path(os.environ.get("TRIM_APPDEST", Path(__file__).resolve().parent.parent))
@@ -28,6 +31,8 @@ def resolve_data_dir():
     candidates = []
     if os.environ.get("FN_MONITOR_DATA"):
         candidates.append(Path(os.environ["FN_MONITOR_DATA"]))
+    if os.environ.get("TRIM_PKGVAR"):
+        candidates.append(Path(os.environ["TRIM_PKGVAR"]))
     if os.environ.get("TRIM_APPDATA"):
         candidates.append(Path(os.environ["TRIM_APPDATA"]))
     appname = os.environ.get("TRIM_APPNAME")
@@ -48,13 +53,22 @@ DATA_DIR = resolve_data_dir()
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_DIR = DATA_DIR / "state"
 LOG_PATH = DATA_DIR / "monitor.log"
+STATUS_PATH = DATA_DIR / "status.json"
 CONFIG_EXAMPLE = APP_DIR / "config.json.example"
 
 MAX_LOG_LINES = 2000
 
+# 同一时刻只允许一轮检测，避免手动触发与定时任务并发
+RUN_LOCK = threading.Lock()
+STATUS_LOCK = threading.Lock()
+
+
+def now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 def log(msg):
-    line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    line = f"[{now_str()}] {msg}"
     print(line, flush=True)
     try:
         with open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -68,6 +82,46 @@ def log(msg):
         pass
 
 
+def read_log_tail(lines=200):
+    """读取日志末尾若干行，供 Web 界面展示。"""
+    try:
+        if not LOG_PATH.exists():
+            return ""
+        txt = LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(txt[-max(1, int(lines)):])
+    except Exception as e:
+        return f"读取日志失败: {e}"
+
+
+def load_status():
+    with STATUS_LOCK:
+        try:
+            if STATUS_PATH.exists():
+                data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+        return {}
+
+
+def save_status(status):
+    with STATUS_LOCK:
+        try:
+            tmp = STATUS_PATH.with_name("status.json.tmp")
+            tmp.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, STATUS_PATH)
+        except Exception as e:
+            log(f"[状态] 写入失败: {e}")
+
+
+def parse_time(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
 def load_config():
     if not CONFIG_PATH.exists():
         # 首次运行：从模板生成配置，并提示用户填写
@@ -78,6 +132,13 @@ def load_config():
             raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
     with open(CONFIG_PATH, encoding="utf-8-sig") as f:
         return json.load(f)
+
+
+def save_config(config):
+    """原子写入配置，避免界面保存时产生半截文件。"""
+    tmp = CONFIG_PATH.with_name("config.json.tmp")
+    tmp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, CONFIG_PATH)
 
 
 def gh_api(url, token=None):
@@ -279,6 +340,7 @@ def state_path_for(repo_name):
 
 
 def check_one(repo_conf, config):
+    """检测单个仓库，返回结构化结果供界面展示。"""
     name = repo_conf["name"]
     upstream = repo_conf["upstream"]
     branch = repo_conf.get("branch", "main")
@@ -291,67 +353,184 @@ def check_one(repo_conf, config):
         latest = get_latest_commit(upstream, branch, token)
     except Exception as e:
         log(f"[{name}] 获取最新 commit 失败: {e}")
-        return
+        return {"result": "error", "message": f"获取最新提交失败: {e}", "has_update": False}
 
+    sha = latest["sha"]
     sp = state_path_for(name)
     last = sp.read_text().strip() if sp.exists() else ""
 
     if not last:
-        log(f"[{name}] 首次运行，记录基线: {latest['sha'][:10]}")
-        sp.write_text(latest["sha"])
+        log(f"[{name}] 首次运行，记录基线: {sha[:10]}")
+        sp.write_text(sha)
         send_serverchan(
             f"✅ {name} 监控已就绪",
-            f"已开始监控 **{upstream}** (`{branch}`)，当前最新提交 `{latest['sha'][:10]}`：{latest['message']}",
+            f"已开始监控 **{upstream}** (`{branch}`)，当前最新提交 `{sha[:10]}`：{latest['message']}",
             config.get("serverchan", {}).get("sendkey", ""),
         )
-        return
+        return {
+            "result": "first_run",
+            "message": f"已记录基线 {sha[:10]}：{latest['message']}",
+            "has_update": False,
+            "sha": sha,
+        }
 
-    if last == latest["sha"]:
+    if last == sha:
         log(f"[{name}] 无更新")
-        return
+        return {
+            "result": "no_update",
+            "message": f"无更新（{sha[:10]}）",
+            "has_update": False,
+            "sha": sha,
+        }
 
-    log(f"[{name}] 发现更新: {last[:10]} -> {latest['sha'][:10]}")
+    log(f"[{name}] 发现更新: {last[:10]} -> {sha[:10]}")
     try:
-        compare = get_compare(upstream, last, latest["sha"], token)
+        compare = get_compare(upstream, last, sha, token)
         summary = summarize_diff(compare, keywords)
     except Exception as e:
         log(f"[{name}] 获取 diff 失败: {e}，仅推送基础信息")
         summary = {"total_commits": 0, "total_files": 0, "key_files": [], "other_files": [], "commits": [latest["message"]]}
 
-    ai_text, ai_meta = ai_analyze(upstream, summary, last, latest["sha"], config.get("ai"))
+    ai_text, ai_meta = ai_analyze(upstream, summary, last, sha, config.get("ai"))
 
     title = f"🔔 {name} 上游更新"
     if ai_meta and ai_meta.get("suggestion") == "建议更新":
         title = f"🟢 {name} 建议更新（{ai_meta.get('urgency','中')}）"
-    desp = build_message(repo_conf, summary, ai_text, ai_meta, last, latest["sha"])
+    desp = build_message(repo_conf, summary, ai_text, ai_meta, last, sha)
 
-    send_serverchan(title, desp, config.get("serverchan", {}).get("sendkey", ""))
-    sp.write_text(latest["sha"])
+    push_ok = send_serverchan(title, desp, config.get("serverchan", {}).get("sendkey", ""))
+    sp.write_text(sha)
     log(f"[{name}] 处理完成")
 
+    detail = f"{last[:10]} → {sha[:10]}，{summary['total_commits']} commits / {summary['total_files']} files"
+    if ai_meta:
+        detail += f"，建议：{ai_meta.get('suggestion')}"
+    if not push_ok:
+        detail += "（推送未发送）"
+    return {
+        "result": "updated",
+        "message": detail,
+        "has_update": True,
+        "sha": sha,
+        "base": last,
+        "suggestion": (ai_meta or {}).get("suggestion"),
+        "urgency": (ai_meta or {}).get("urgency"),
+    }
 
-def run_once(config):
-    log("===== 开始一轮检测 =====")
-    for repo in config.get("repos", []):
+
+def is_running():
+    return RUN_LOCK.locked()
+
+
+def run_once(config=None, trigger="scheduled"):
+    """执行一轮检测。已有任务在跑时直接返回 False，避免并发。"""
+    if not RUN_LOCK.acquire(blocking=False):
+        log("已有一轮检测正在进行，跳过本次触发")
+        return False
+
+    if config is None:
+        config = load_config()
+
+    started = now_str()
+    status = load_status()
+    status.update({
+        "running": True,
+        "last_run_at": started,
+        "last_run_trigger": trigger,
+        "last_run_error": None,
+    })
+    status.setdefault("repos", {})
+    save_status(status)
+
+    log(f"===== 开始一轮检测（{trigger}）=====")
+    try:
+        for repo in config.get("repos", []):
+            if not isinstance(repo, dict):
+                continue
+            name = repo.get("name") or repo.get("upstream", "?")
+            status["repos"].setdefault(name, {})["checking"] = True
+            save_status(status)
+            try:
+                res = check_one(repo, config)
+            except Exception as e:
+                log(f"[{name}] 异常: {e}\n{traceback.format_exc()}")
+                res = {"result": "error", "message": f"检测异常: {e}", "has_update": False}
+            entry = status["repos"].setdefault(name, {})
+            entry.pop("checking", None)
+            entry.update({
+                "name": name,
+                "upstream": repo.get("upstream", ""),
+                "branch": repo.get("branch", "main"),
+                "last_check_at": now_str(),
+            })
+            entry.update(res)
+            save_status(status)
+    finally:
+        status["running"] = False
+        status["last_run_end"] = now_str()
+        save_status(status)
+        log("===== 本轮检测结束 =====")
+        RUN_LOCK.release()
+    return True
+
+
+def next_run_at(config=None):
+    """根据上次检测时间与间隔推算下次检测时间。"""
+    st = load_status()
+    last = parse_time(st.get("last_run_at", ""))
+    if last is None:
+        return None
+    if config is None:
         try:
-            check_one(repo, config)
+            config = load_config()
+        except Exception:
+            config = {}
+    try:
+        interval = max(1, int(config.get("interval_hours", 24) or 24))
+    except Exception:
+        interval = 24
+    return (last + timedelta(hours=interval)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def run_forever(stop_event=None):
+    """后台调度循环：每分钟检查一次是否到达下次检测时间。"""
+    if stop_event is None:
+        stop_event = threading.Event()
+    log("监控调度启动")
+    while not stop_event.is_set():
+        try:
+            config = load_config()
         except Exception as e:
-            log(f"[{repo.get('name','?')}] 异常: {e}\n{traceback.format_exc()}")
-    log("===== 本轮检测结束 =====")
+            log(f"读取配置失败: {e}")
+            config = {}
+        st = load_status()
+        last = parse_time(st.get("last_run_at", ""))
+        try:
+            interval = max(1, int(config.get("interval_hours", 24) or 24))
+        except Exception:
+            interval = 24
+
+        if last is None:
+            wait_seconds = 0
+        else:
+            remain = (last + timedelta(hours=interval) - datetime.now()).total_seconds()
+            wait_seconds = 0 if remain <= 0 else min(60, remain)
+
+        if wait_seconds <= 0:
+            run_once(config, trigger="scheduled")
+        else:
+            stop_event.wait(wait_seconds)
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "once":
-        run_once(load_config())
+        run_once(load_config(), trigger="manual")
         return
-    interval = max(1, int(load_config().get("interval_hours", 24)))
-    log(f"监控启动，检测间隔 {interval} 小时")
-    while True:
-        try:
-            run_once(load_config())
-        except Exception as e:
-            log(f"主循环异常: {e}\n{traceback.format_exc()}")
-        time.sleep(interval * 3600)
+    log("监控启动")
+    try:
+        run_forever()
+    except KeyboardInterrupt:
+        log("监控已停止")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,13 @@
 {
-
+    ".url": {
+        "fn-repo-monitor.main": {
+            "title": "仓库更新监控",
+            "desc": "定时检测上游仓库更新并推送到 Server酱",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "http",
+            "url": "/cgi/ThirdParty/fn-repo-monitor/index.cgi/",
+            "allUsers": true
+        }
+    }
 }

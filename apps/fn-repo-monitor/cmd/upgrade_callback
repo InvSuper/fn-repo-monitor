@@ -1,6 +1,6 @@
 #!/bin/bash
 # 升级后回调：重启监控进程使新版本生效
-APP_DIR="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
-"$APP_DIR/cmd/main" stop >/dev/null 2>&1
-"$APP_DIR/cmd/main" start >/dev/null 2>&1
+CMD_DIR="$(cd "$(dirname "$0")" && pwd)"
+"$CMD_DIR/main" stop >/dev/null 2>&1
+"$CMD_DIR/main" start >/dev/null 2>&1
 exit 0

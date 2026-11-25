@@ -5,7 +5,9 @@ APP_DIR="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
 # 持久化数据目录（升级不丢失配置与状态）
 DATA_DIR="${FN_MONITOR_DATA:-}"
 if [ -z "$DATA_DIR" ]; then
-    if [ -n "$TRIM_APPDATA" ]; then
+    if [ -n "$TRIM_PKGVAR" ]; then
+        DATA_DIR="$TRIM_PKGVAR"
+    elif [ -n "$TRIM_APPDATA" ]; then
         DATA_DIR="$TRIM_APPDATA"
     elif [ -n "$TRIM_APPNAME" ] && [ -d "/var/apps/$TRIM_APPNAME" ]; then
         DATA_DIR="/var/apps/$TRIM_APPNAME/var"
@@ -17,6 +19,8 @@ mkdir -p "$DATA_DIR" 2>/dev/null
 
 PID_FILE="$DATA_DIR/monitor.pid"
 STDOUT_LOG="$DATA_DIR/monitor.stdout.log"
+PORT="${TRIM_SERVICE_PORT:-3869}"
+WEB_DIR="$APP_DIR/ui"
 
 find_python() {
     if [ -n "$PYTHON" ] && command -v "$PYTHON" >/dev/null 2>&1; then
@@ -30,8 +34,15 @@ find_python() {
     return 1
 }
 
-start() {
+is_running() {
     if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+start() {
+    if is_running; then
         echo "already running (pid $(cat "$PID_FILE"))"
         exit 0
     fi
@@ -45,6 +56,17 @@ start() {
     echo "python: $PY"
     echo "app dir: $APP_DIR"
     echo "data dir: $DATA_DIR"
+    echo "port: $PORT"
+
+    # 兼容旧版本：早期数据可能写在 TRIM_APPDATA 或 /var/apps/<app>/var，首次升级时迁移一次
+    for LEGACY_DIR in "$TRIM_APPDATA" "/var/apps/${TRIM_APPNAME:-fn-repo-monitor}/var"; do
+        [ -n "$LEGACY_DIR" ] || continue
+        [ "$LEGACY_DIR" = "$DATA_DIR" ] && continue
+        if [ ! -f "$DATA_DIR/config.json" ] && [ -f "$LEGACY_DIR/config.json" ]; then
+            cp -a "$LEGACY_DIR/." "$DATA_DIR/" 2>/dev/null
+            echo "已迁移旧数据目录: $LEGACY_DIR -> $DATA_DIR"
+        fi
+    done
 
     # 首次运行生成配置文件
     if [ ! -f "$DATA_DIR/config.json" ] && [ -f "$APP_DIR/config.json.example" ]; then
@@ -53,10 +75,11 @@ start() {
     fi
 
     export FN_MONITOR_DATA="$DATA_DIR"
-    nohup "$PY" "$APP_DIR/src/monitor.py" >> "$STDOUT_LOG" 2>&1 &
+    nohup "$PY" "$APP_DIR/src/server.py" --host 127.0.0.1 --port "$PORT" --web-dir "$WEB_DIR" \
+        >> "$STDOUT_LOG" 2>&1 &
     echo $! > "$PID_FILE"
     sleep 1
-    if kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    if is_running; then
         echo "started pid $(cat "$PID_FILE")"
         exit 0
     else
@@ -73,12 +96,13 @@ stop() {
         rm -f "$PID_FILE"
     fi
     # 兜底：清理残留进程
+    pkill -f "$APP_DIR/src/server.py" 2>/dev/null
     pkill -f "$APP_DIR/src/monitor.py" 2>/dev/null
     exit 0
 }
 
 status() {
-    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    if is_running; then
         exit 0
     fi
     exit 3

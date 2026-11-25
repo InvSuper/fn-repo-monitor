@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>仓库更新监控</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="heading">
+        <h1>仓库更新监控</h1>
+        <p id="subtitle" class="muted">正在加载…</p>
+      </div>
+      <div class="actions">
+        <button id="btn-check" class="btn primary" type="button">立即检测</button>
+        <button id="btn-test" class="btn" type="button">测试推送</button>
+        <button id="btn-refresh" class="btn" type="button">刷新</button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner hidden"></div>
+
+    <section class="cards">
+      <div class="card">
+        <span class="label">服务状态</span>
+        <strong id="stat-service">-</strong>
+        <span class="hint" id="stat-version"></span>
+      </div>
+      <div class="card">
+        <span class="label">上次检测</span>
+        <strong id="stat-last">-</strong>
+        <span class="hint" id="stat-trigger"></span>
+      </div>
+      <div class="card">
+        <span class="label">下次检测</span>
+        <strong id="stat-next">-</strong>
+        <span class="hint" id="stat-interval"></span>
+      </div>
+      <div class="card">
+        <span class="label">监控仓库</span>
+        <strong id="stat-repos">-</strong>
+        <span class="hint" id="stat-updates"></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>监控仓库</h2>
+        <span class="muted" id="repo-hint"></span>
+      </div>
+      <div id="repo-list" class="repo-list">
+        <p class="muted">加载中…</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>配置</h2>
+        <span class="muted">保存后立即生效，无需重启应用</span>
+      </div>
+      <form id="config-form" autocomplete="off">
+        <div class="grid">
+          <label class="field">
+            <span>检测间隔（小时）</span>
+            <input id="cfg-interval" type="number" min="1" max="720" step="1" required>
+          </label>
+          <label class="field">
+            <span>Server酱 SendKey</span>
+            <input id="cfg-sendkey" type="text" placeholder="sctp 或 SCT 开头">
+          </label>
+          <label class="field">
+            <span>GitHub Token（可选，提高限流额度）</span>
+            <input id="cfg-token" type="text" placeholder="ghp_…">
+          </label>
+        </div>
+
+        <div class="subsection">
+          <label class="switch-row">
+            <input id="cfg-ai-enabled" type="checkbox">
+            <span>启用 AI 解读</span>
+          </label>
+          <div class="grid">
+            <label class="field">
+              <span>AI 接口地址</span>
+              <input id="cfg-ai-base" type="text" placeholder="https://api.deepseek.com/v1">
+            </label>
+            <label class="field">
+              <span>AI API Key</span>
+              <input id="cfg-ai-key" type="text" placeholder="留空则跳过解读">
+            </label>
+            <label class="field">
+              <span>模型名称</span>
+              <input id="cfg-ai-model" type="text" placeholder="deepseek-chat">
+            </label>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <div class="subsection-head">
+            <h3>仓库列表</h3>
+            <button id="btn-add-repo" class="btn small" type="button">添加仓库</button>
+          </div>
+          <div id="repo-editor" class="repo-editor"></div>
+        </div>
+
+        <div class="form-foot">
+          <span id="save-hint" class="muted"></span>
+          <button id="btn-save" class="btn primary" type="submit">保存配置</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>运行日志</h2>
+        <button id="btn-log" class="btn small" type="button">刷新日志</button>
+      </div>
+      <pre id="log-view" class="log">加载中…</pre>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -22,10 +22,12 @@ jobs:
           sudo mv fnpack /usr/local/bin/fnpack
           fnpack --help || true
 
-      - name: Ensure Python scripts executable
+      - name: Ensure scripts executable
         run: |
           chmod +x apps/fn-repo-monitor/cmd/*
           chmod +x apps/fn-repo-monitor/app/src/monitor.py
+          chmod +x apps/fn-repo-monitor/app/src/server.py
+          chmod +x apps/fn-repo-monitor/app/ui/index.cgi
 
       - name: Build FPK
         run: |
