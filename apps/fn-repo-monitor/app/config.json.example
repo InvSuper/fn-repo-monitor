@@ -1,6 +1,7 @@
 {
-  "_comment": "飞牛仓库更新监控配置。修改后重启应用生效。AI 不配置 api_key 则只推送原始摘要不解读。",
+  "_comment": "飞牛仓库更新监控配置。在图形界面保存后立即生效，也可直接编辑本文件后重启应用。AI 不配置 api_key 则只推送原始摘要，不做解读。",
   "interval_hours": 24,
+  "daily_time": "",
   "github_token": "",
   "serverchan": {
     "sendkey": "",
@@ -8,32 +9,11 @@
   },
   "ai": {
     "enabled": true,
-    "_comment": "默认 DeepSeek（新用户有免费额度）。也可换成任意兼容 OpenAI 格式的接口，如 Gemini 代理等。api_key 留空则关闭 AI 解读。",
+    "_comment": "默认 DeepSeek（新用户有免费额度）。也可换成任意兼容 OpenAI 格式的接口。api_key 留空则关闭 AI 解读。",
     "api_base": "https://api.deepseek.com/v1",
     "api_key": "",
     "model": "deepseek-chat"
   },
-  "repos": [
-    {
-      "name": "OpenWrt-IPQ60XX",
-      "upstream": "LiBwrt/openwrt-6.x",
-      "branch": "25.12-nss",
-      "keywords": ["ipq60xx", "qualcommax", "qca", "nss", "quic", "edma", "qsdk", "ipq"],
-      "build_url": "https://github.com/InvSuper/OpenWrt-APK/actions/workflows/IPQ60XX-NOWIFI-LibWrt.yml"
-    },
-    {
-      "name": "mygo-cloudmusic",
-      "upstream": "egoist/mygo-cloudmusic",
-      "branch": "main",
-      "keywords": ["mpv", "decode", "component", "navidrome", "fnos", "飞牛"],
-      "build_url": "https://github.com/InvSuper/mygo-cloudmusic/actions/workflows/release.yml"
-    },
-    {
-      "name": "fnmusic",
-      "upstream": "waygu-music-plugin/fnmusic",
-      "branch": "main",
-      "keywords": [],
-      "build_url": "https://github.com/InvSuper/fnmusic/actions/workflows/release.yml"
-    }
-  ]
+  "_repos_hint": "在图形界面「配置 → 仓库列表」中添加。watch 可选 commit（任意新提交）或 release（仅正式版 Release）。",
+  "repos": []
 }

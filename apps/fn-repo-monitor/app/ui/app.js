@@ -50,13 +50,21 @@ function statusBadge(repo) {
       return { cls: "ok", text: "无更新" };
     case "first_run":
       return { cls: "idle", text: "已建基线" };
-    case "updated":
-      return { cls: "warn", text: repo.suggestion ? `有更新 · ${repo.suggestion}` : "有更新" };
+    case "updated": {
+      const label = repo.watch === "release" ? "新版本" : "有更新";
+      return { cls: "warn", text: repo.suggestion ? `${label} · ${repo.suggestion}` : label };
+    }
     case "error":
       return { cls: "err", text: "检测失败" };
     default:
       return { cls: "idle", text: "待检测" };
   }
+}
+
+function formatBaseline(value) {
+  if (!value) return "未建立";
+  if (value.startsWith("release:")) return value.slice("release:".length);
+  return value.slice(0, 10);
 }
 
 function renderRepoList(repos) {
@@ -94,8 +102,9 @@ function renderRepoList(repos) {
 
     const sub = document.createElement("div");
     sub.className = "repo-sub";
-    const baseline = repo.baseline ? repo.baseline.slice(0, 10) : "未建立";
-    sub.textContent = `${repo.upstream} @ ${repo.branch} · 基线 ${baseline}`;
+    const mode = repo.watch === "release" ? "仅正式版" : "任意提交";
+    const source = repo.watch === "release" ? repo.upstream : `${repo.upstream} @ ${repo.branch}`;
+    sub.textContent = `${source} · ${mode} · 基线 ${formatBaseline(repo.baseline)}`;
 
     main.appendChild(nameRow);
     main.appendChild(sub);
@@ -130,7 +139,9 @@ function renderStatus(data) {
     : "";
 
   $("stat-next").textContent = schedule.next_run_at || "尚未安排";
-  $("stat-interval").textContent = `每 ${schedule.interval_hours} 小时`;
+  $("stat-interval").textContent = schedule.daily_time
+    ? `每天 ${schedule.daily_time}`
+    : `每 ${schedule.interval_hours} 小时`;
 
   $("stat-repos").textContent = `${repos.length} 个`;
   const updateCount = repos.filter((r) => r.has_update).length;
@@ -176,6 +187,25 @@ function createField(labelText, value, placeholder, dataField, type = "text") {
   return label;
 }
 
+function createSelect(labelText, value, dataField, options) {
+  const label = document.createElement("label");
+  label.className = "field";
+  const span = document.createElement("span");
+  span.textContent = labelText;
+  const select = document.createElement("select");
+  select.dataset.field = dataField;
+  options.forEach(([optionValue, optionText]) => {
+    const option = document.createElement("option");
+    option.value = optionValue;
+    option.textContent = optionText;
+    if ((value || "commit") === optionValue) option.selected = true;
+    select.appendChild(option);
+  });
+  label.appendChild(span);
+  label.appendChild(select);
+  return label;
+}
+
 function addRepoRow(repo = {}) {
   const row = document.createElement("div");
   row.className = "repo-row";
@@ -198,13 +228,17 @@ function addRepoRow(repo = {}) {
 
   const grid = document.createElement("div");
   grid.className = "row-grid";
-  grid.appendChild(createField("名称", repo.name, "OpenWrt-IPQ60XX", "name"));
+  grid.appendChild(createField("名称", repo.name, "示例项目", "name"));
 
   const upstream = createField("上游仓库", repo.upstream, "owner/repo", "upstream");
   grid.appendChild(upstream);
 
   grid.appendChild(createField("分支", repo.branch || "main", "main", "branch"));
-  grid.appendChild(createField("关键词（逗号分隔，可留空）", (repo.keywords || []).join(", "), "ipq60xx, nss", "keywords"));
+  grid.appendChild(createSelect("监控方式", repo.watch, "watch", [
+    ["commit", "任意新提交"],
+    ["release", "仅正式版 Release"],
+  ]));
+  grid.appendChild(createField("关键词（逗号分隔，可留空）", (repo.keywords || []).join(", "), "src, config, docs", "keywords"));
   grid.appendChild(createField("编译跳转链接（可留空）", repo.build_url, "https://github.com/.../actions", "build_url"));
 
   row.appendChild(head);
@@ -235,8 +269,11 @@ function refreshRowTitles() {
 function renderConfig(config) {
   state.rawConfig = config;
   $("cfg-interval").value = config.interval_hours || 24;
+  $("cfg-daily-time").value = config.daily_time || "";
   $("cfg-sendkey").value = (config.serverchan || {}).sendkey || "";
   $("cfg-token").value = config.github_token || "";
+  $("ai-test-hint").textContent = "";
+  $("ai-test-hint").className = "hint";
 
   const ai = config.ai || {};
   $("cfg-ai-enabled").checked = Boolean(ai.enabled);
@@ -256,6 +293,7 @@ function collectConfig() {
       name: get("name").trim(),
       upstream: get("upstream").trim(),
       branch: get("branch").trim() || "main",
+      watch: get("watch") || "commit",
       keywords: get("keywords")
         .split(/[,，]/)
         .map((k) => k.trim())
@@ -267,6 +305,7 @@ function collectConfig() {
   return {
     ...(state.rawConfig || {}),
     interval_hours: Number($("cfg-interval").value),
+    daily_time: $("cfg-daily-time").value || "",
     github_token: $("cfg-token").value.trim(),
     serverchan: { sendkey: $("cfg-sendkey").value.trim() },
     ai: {
@@ -350,6 +389,35 @@ async function testPush() {
   }
 }
 
+async function testAI() {
+  const button = $("btn-test-ai");
+  const hint = $("ai-test-hint");
+  button.disabled = true;
+  hint.className = "hint";
+  hint.textContent = "测试中…";
+  try {
+    const data = await requestJson("api/test-ai", {
+      method: "POST",
+      body: JSON.stringify({
+        ai: {
+          enabled: $("cfg-ai-enabled").checked,
+          api_base: $("cfg-ai-base").value.trim(),
+          api_key: $("cfg-ai-key").value.trim(),
+          model: $("cfg-ai-model").value.trim(),
+        },
+      }),
+    });
+    const reply = (data.reply || "").replace(/\s+/g, " ").slice(0, 60);
+    hint.className = "hint ok";
+    hint.textContent = `连接正常：${reply}`;
+  } catch (error) {
+    hint.className = "hint err";
+    hint.textContent = `测试失败：${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadLog() {
   try {
     const data = await requestJson("api/log?lines=300");
@@ -368,6 +436,7 @@ function bindEvents() {
   });
   $("btn-check").addEventListener("click", triggerCheck);
   $("btn-test").addEventListener("click", testPush);
+  $("btn-test-ai").addEventListener("click", testAI);
   $("btn-log").addEventListener("click", loadLog);
   $("btn-add-repo").addEventListener("click", () => {
     addRepoRow();

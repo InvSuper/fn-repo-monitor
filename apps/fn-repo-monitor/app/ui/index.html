@@ -3,19 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>仓库更新监控</title>
+  <title>GitHub仓库更新监控</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="app">
     <header class="topbar">
       <div class="heading">
-        <h1>仓库更新监控</h1>
+        <h1>GitHub仓库更新监控</h1>
         <p id="subtitle" class="muted">正在加载…</p>
       </div>
       <div class="actions">
         <button id="btn-check" class="btn primary" type="button">立即检测</button>
-        <button id="btn-test" class="btn" type="button">测试推送</button>
         <button id="btn-refresh" class="btn" type="button">刷新</button>
       </div>
     </header>
@@ -67,20 +66,32 @@
             <input id="cfg-interval" type="number" min="1" max="720" step="1" required>
           </label>
           <label class="field">
-            <span>Server酱 SendKey</span>
-            <input id="cfg-sendkey" type="text" placeholder="sctp 或 SCT 开头">
+            <span>每天固定检测时间（可选）</span>
+            <input id="cfg-daily-time" type="time">
           </label>
+          <div class="field">
+            <span>Server酱 SendKey</span>
+            <div class="input-row">
+              <input id="cfg-sendkey" type="text" placeholder="sctp 或 SCT 开头">
+              <button id="btn-test" class="btn small" type="button">测试推送</button>
+            </div>
+          </div>
           <label class="field">
             <span>GitHub Token（可选，提高限流额度）</span>
             <input id="cfg-token" type="text" placeholder="ghp_…">
           </label>
         </div>
+        <p class="muted">固定检测时间留空时按间隔执行；填写后每天在该时刻检测（如 08:30），间隔设置不再生效。</p>
 
         <div class="subsection">
-          <label class="switch-row">
-            <input id="cfg-ai-enabled" type="checkbox">
-            <span>启用 AI 解读</span>
-          </label>
+          <div class="switch-row">
+            <label class="checkbox-label">
+              <input id="cfg-ai-enabled" type="checkbox">
+              <span>启用 AI 解读</span>
+            </label>
+            <button id="btn-test-ai" class="btn small" type="button">测试 AI</button>
+            <span id="ai-test-hint" class="hint"></span>
+          </div>
           <div class="grid">
             <label class="field">
               <span>AI 接口地址</span>
@@ -102,6 +113,7 @@
             <h3>仓库列表</h3>
             <button id="btn-add-repo" class="btn small" type="button">添加仓库</button>
           </div>
+          <p class="muted">监控方式：任意新提交 = 分支有新 commit 就提醒；仅正式版 Release = 只在上游发布非预发布版本时提醒，适合等官方稳定版再同步。</p>
           <div id="repo-editor" class="repo-editor"></div>
         </div>
 

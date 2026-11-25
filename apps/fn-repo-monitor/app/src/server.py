@@ -56,9 +56,19 @@ def normalize_config(raw):
     if interval < 1 or interval > 720:
         raise ValueError("检测间隔需在 1 到 720 小时之间")
 
-    repos = raw.get("repos")
-    if not isinstance(repos, list) or not repos:
-        raise ValueError("至少需要配置一个监控仓库")
+    daily_time = str(raw.get("daily_time", "") or "").strip()
+    if daily_time:
+        match = re.match(r"^(\d{1,2}):(\d{2})$", daily_time)
+        if not match:
+            raise ValueError("每天固定检测时间格式应为 HH:MM（例如 08:30），留空则按间隔执行")
+        hour, minute = int(match.group(1)), int(match.group(2))
+        if hour > 23 or minute > 59:
+            raise ValueError("每天固定检测时间格式应为 HH:MM（例如 08:30），留空则按间隔执行")
+        daily_time = f"{hour:02d}:{minute:02d}"
+
+    repos = raw.get("repos", [])
+    if not isinstance(repos, list):
+        raise ValueError("仓库列表格式不正确")
 
     normalized_repos = []
     for idx, item in enumerate(repos, start=1):
@@ -75,16 +85,21 @@ def normalize_config(raw):
             keywords = [k.strip() for k in keywords.replace("，", ",").split(",") if k.strip()]
         if not isinstance(keywords, list):
             keywords = []
+        watch = str(item.get("watch", "commit") or "commit").strip().lower()
+        if watch not in ("commit", "release"):
+            watch = "commit"
         normalized_repos.append({
             "name": name,
             "upstream": upstream,
             "branch": str(item.get("branch", "main")).strip() or "main",
+            "watch": watch,
             "keywords": [str(k).strip() for k in keywords if str(k).strip()],
             "build_url": str(item.get("build_url", "")).strip(),
         })
 
     config = dict(raw)
     config["interval_hours"] = interval
+    config["daily_time"] = daily_time
     config["github_token"] = str(raw.get("github_token", "") or "").strip()
     serverchan = raw.get("serverchan") if isinstance(raw.get("serverchan"), dict) else {}
     config["serverchan"] = dict(serverchan)
@@ -118,6 +133,7 @@ def build_status():
             "name": name,
             "upstream": repo.get("upstream", ""),
             "branch": repo.get("branch", "main"),
+            "watch": repo.get("watch", "commit"),
             "baseline": read_baseline(name),
             "checking": bool(entry.get("checking")),
             "last_check_at": entry.get("last_check_at", ""),
@@ -135,6 +151,8 @@ def build_status():
         warnings.append(f"读取配置失败：{config['_error']}")
     if not sendkey:
         warnings.append("尚未配置 Server酱 SendKey，检测结果不会推送")
+    if not config.get("repos"):
+        warnings.append("尚未添加监控仓库，请在下方仓库列表中添加")
     if not ai.get("enabled"):
         warnings.append("AI 解读已关闭，仅推送原始摘要")
     elif not ai.get("api_key"):
@@ -149,6 +167,7 @@ def build_status():
         },
         "schedule": {
             "interval_hours": interval,
+            "daily_time": str(config.get("daily_time", "") or ""),
             "last_run_at": status.get("last_run_at", ""),
             "last_run_end": status.get("last_run_end", ""),
             "last_run_trigger": status.get("last_run_trigger", ""),
@@ -270,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/test-push":
             self._handle_test_push()
             return
+        if path == "/api/test-ai":
+            self._handle_test_ai()
+            return
         if path.startswith("/api/"):
             self._json(404, {"error": "接口不存在"})
             return
@@ -294,6 +316,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         monitor.log("[配置] 已通过 Web 界面更新配置")
         self._json(200, {"saved": True, "config": config})
+
+    def _handle_test_ai(self):
+        try:
+            payload = self._read_json()
+        except Exception as e:
+            self._json(400, {"error": f"请求体解析失败: {e}"})
+            return
+        ai = payload.get("ai") if isinstance(payload, dict) else None
+        if not isinstance(ai, dict):
+            config = load_config_safe()
+            ai = config.get("ai") if isinstance(config.get("ai"), dict) else {}
+        ok, message = monitor.test_ai_connection(ai)
+        if ok:
+            self._json(200, {"ok": True, "reply": message})
+        else:
+            self._json(502, {"error": message})
 
     def _handle_test_push(self):
         config = load_config_safe()

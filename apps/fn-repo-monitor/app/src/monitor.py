@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-飞牛仓库更新监控 (fn-repo-monitor)
-- 定时检测多个 GitHub 上游仓库的更新
-- AI 解读变更内容与影响
-- 判断是否建议更新固件/客户端
-- 推送到 Server酱，带手动编译跳转链接
+GitHub仓库更新监控 (fn-repo-monitor)
+- 定时检测多个 GitHub 仓库的更新（任意提交或仅正式版 Release）
+- AI 解读变更内容与影响，判断是否建议跟进
+- 推送到 Server酱，可附自定义跳转链接
 
 本模块既可作为命令行入口独立运行，也可被 server.py 导入复用。
 """
@@ -122,12 +121,41 @@ def parse_time(value):
         return None
 
 
+def parse_daily_time(value):
+    """解析每天固定检测时间，返回 (hour, minute)，非法或留空返回 None。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.match(r"^(\d{1,2}):(\d{2})$", text)
+    if not match:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def compute_daily_due(daily, last_run, now=None):
+    """返回下一次固定检测时间点。
+    已到今天的检测点、且上次检测早于该时间点时，返回 now 表示应立刻执行。
+    """
+    now = now or datetime.now()
+    today = now.replace(hour=daily[0], minute=daily[1], second=0, microsecond=0)
+    if now < today:
+        return today
+    if last_run is None or last_run < today:
+        return now
+    return today + timedelta(days=1)
+
+
 def load_config():
     if not CONFIG_PATH.exists():
         # 首次运行：从模板生成配置，并提示用户填写
         if CONFIG_EXAMPLE.exists():
             CONFIG_PATH.write_text(CONFIG_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
-            log(f"[配置] 已生成默认配置文件: {CONFIG_PATH}，请填写 Server酱 SendKey 后重启应用")
+            log(f"[配置] 已生成默认配置文件: {CONFIG_PATH}，请打开应用界面填写 Server酱 SendKey 并添加监控仓库")
         else:
             raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
     with open(CONFIG_PATH, encoding="utf-8-sig") as f:
@@ -167,6 +195,28 @@ def get_compare(repo, base, head, token=None):
     return gh_api(url, token)
 
 
+def get_latest_stable_release(repo, token=None):
+    """取最近一个正式版 Release（跳过草稿和预发布）。"""
+    url = f"https://api.github.com/repos/{repo}/releases?per_page=30"
+    data = gh_api(url, token)
+    if not isinstance(data, list):
+        return None
+    for release in data:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        tag = release.get("tag_name") or ""
+        if not tag:
+            continue
+        return {
+            "tag": tag,
+            "name": release.get("name") or tag,
+            "body": release.get("body") or "",
+            "url": release.get("html_url") or f"https://github.com/{repo}/releases/tag/{tag}",
+            "published_at": release.get("published_at") or release.get("created_at") or "",
+        }
+    return None
+
+
 def summarize_diff(compare, keywords):
     commits = compare.get("commits", [])
     files = compare.get("files", [])
@@ -195,16 +245,47 @@ def summarize_diff(compare, keywords):
     }
 
 
-def ai_analyze(repo_name, summary, base, head, ai_conf):
-    """调用 AI 解读变更，返回解读文本 + 是否建议更新"""
-    if not ai_conf or not ai_conf.get("enabled"):
-        return None, None
-    api_key = ai_conf.get("api_key", "").strip()
-    if not api_key:
-        return None, None
+def _ai_available(ai_conf):
+    return bool(ai_conf and ai_conf.get("enabled") and str(ai_conf.get("api_key", "")).strip())
 
+
+def _parse_ai_meta(text):
+    suggestion = "可以暂缓"
+    urgency = "中"
+    for line in text.splitlines():
+        if line.startswith("建议："):
+            suggestion = line.replace("建议：", "").strip()
+        elif line.startswith("紧迫度："):
+            urgency = line.replace("紧迫度：", "").strip()
+    return {"suggestion": suggestion, "urgency": urgency}
+
+
+def _call_ai(prompt, ai_conf):
     api_base = ai_conf.get("api_base", "https://api.deepseek.com/v1").rstrip("/")
     model = ai_conf.get("model", "deepseek-chat")
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 800,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(f"{api_base}/chat/completions", data=payload)
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {str(ai_conf.get('api_key', '')).strip()}")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log(f"[AI] 解读失败: {e}")
+        return None
+
+
+def ai_analyze(repo_name, summary, base, head, ai_conf):
+    """调用 AI 解读提交变更，返回解读文本 + 是否建议更新"""
+    if not _ai_available(ai_conf):
+        return None, None
 
     files_text = "\n".join(summary["key_files"] + summary["other_files"][:15])
     commits_text = "\n".join(summary["commits"])
@@ -233,31 +314,51 @@ def ai_analyze(repo_name, summary, base, head, ai_conf):
 紧迫度：<高|中|低>
 """
 
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 800,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(f"{api_base}/chat/completions", data=payload)
-    req.add_header("Content-Type", "application/json")
-    req.add_header("Authorization", f"Bearer {api_key}")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            text = data["choices"][0]["message"]["content"].strip()
-            suggestion = "可以暂缓"
-            urgency = "中"
-            for line in text.splitlines():
-                if line.startswith("建议："):
-                    suggestion = line.replace("建议：", "").strip()
-                if line.startswith("紧迫度："):
-                    urgency = line.replace("紧迫度：", "").strip()
-            return text, {"suggestion": suggestion, "urgency": urgency}
-    except Exception as e:
-        log(f"[AI] 解读失败: {e}")
+    text = _call_ai(prompt, ai_conf)
+    if not text:
         return None, None
+    return text, _parse_ai_meta(text)
+
+
+def ai_analyze_release(repo_name, release, ai_conf):
+    """调用 AI 解读正式版发布说明。"""
+    if not _ai_available(ai_conf):
+        return None, None
+
+    published = (release.get("published_at") or "")[:10]
+    body = (release.get("body") or "").strip()[:6000] or "（发布说明为空）"
+
+    prompt = f"""你是开源项目维护助手。下面是仓库 {repo_name} 的正式版发布说明（{release['tag']}，{published}）。
+
+{body}
+
+请分析：
+1. 这个版本主要更新了什么（用中文，分点简述）
+2. 是否包含重要修复、新功能、破坏性变更或安全更新
+3. 对于基于该项目维护自定义分支的使用者，是否建议现在同步更新（必须明确回答：建议更新 / 可以暂缓 / 无需更新）
+4. 建议的紧迫程度（高/中/低）
+
+输出格式（严格按此格式，不要多余内容）：
+作用：<一句话概括>
+详情：<2-4个要点>
+建议：<建议更新|可以暂缓|无需更新>
+紧迫度：<高|中|低>
+"""
+
+    text = _call_ai(prompt, ai_conf)
+    if not text:
+        return None, None
+    return text, _parse_ai_meta(text)
+
+
+def test_ai_connection(ai_conf):
+    """用一次最小请求验证 AI 接口是否可用，返回 (是否成功, 提示信息)。"""
+    if not str((ai_conf or {}).get("api_key", "")).strip():
+        return False, "请先填写 AI API Key"
+    text = _call_ai("这是一次连接测试。请只回复：AI 连接正常", ai_conf or {})
+    if not text:
+        return False, "调用失败，请检查接口地址、API Key 和模型名称（详细原因见运行日志）"
+    return True, text.strip()[:200]
 
 
 def send_serverchan(title, desp, sendkey):
@@ -333,6 +434,50 @@ def build_message(repo_conf, summary, ai_text, ai_meta, base, head):
     return "\n".join(lines)
 
 
+def build_release_message(repo_conf, release, ai_text, ai_meta):
+    lines = []
+    if ai_meta:
+        sug = ai_meta.get("suggestion", "可以暂缓")
+        urg = ai_meta.get("urgency", "中")
+        if sug == "建议更新":
+            prefix = "🟢 建议同步"
+        elif sug == "无需更新":
+            prefix = "⚪ 无需更新"
+        else:
+            prefix = "🟡 可以暂缓"
+        lines.append(f"## {prefix}（紧迫度：{urg}）")
+    else:
+        lines.append("## 🚀 发布正式版")
+    lines.append("")
+    lines.append(f"**{repo_conf['name']}** 发布 `{release['tag']}`")
+    if release.get("name") and release["name"] != release["tag"]:
+        lines.append(f"版本名称：{release['name']}")
+    if release.get("published_at"):
+        lines.append(f"发布时间：{release['published_at'][:10]}")
+    lines.append("")
+
+    body = (release.get("body") or "").strip()
+    if body:
+        lines.append("### 📄 发布说明")
+        lines.append(body[:3000])
+        if len(body) > 3000:
+            lines.append("")
+            lines.append("（发布说明较长，已截断，完整内容见下方链接）")
+        lines.append("")
+
+    if ai_text:
+        lines.append("### 🤖 AI 解读")
+        lines.append(ai_text)
+        lines.append("")
+
+    lines.append("### 🔗 链接")
+    lines.append(f"- [Release 页面]({release.get('url', '')})")
+    build_url = repo_conf.get("build_url", "")
+    if build_url:
+        lines.append(f"- [👉 去同步/编译]({build_url})")
+    return "\n".join(lines)
+
+
 def state_path_for(repo_name):
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     safe = repo_name.replace("/", "_").replace(" ", "_")
@@ -340,7 +485,95 @@ def state_path_for(repo_name):
 
 
 def check_one(repo_conf, config):
-    """检测单个仓库，返回结构化结果供界面展示。"""
+    """按监控方式分流：commit（任意提交）或 release（仅正式版）。"""
+    if (repo_conf.get("watch") or "commit").lower() == "release":
+        return check_release_repo(repo_conf, config)
+    return check_commit_repo(repo_conf, config)
+
+
+def check_release_repo(repo_conf, config):
+    """只监控正式版 Release，忽略草稿和预发布。"""
+    name = repo_conf["name"]
+    upstream = repo_conf["upstream"]
+    token = config.get("github_token", "") or None
+
+    log(f"[{name}] 检测正式版 Release: {upstream}")
+
+    try:
+        release = get_latest_stable_release(upstream, token)
+    except Exception as e:
+        log(f"[{name}] 获取 Release 失败: {e}")
+        return {"result": "error", "message": f"获取 Release 失败: {e}", "has_update": False}
+
+    if not release:
+        log(f"[{name}] 没有找到正式版 Release")
+        return {
+            "result": "error",
+            "message": "上游没有正式版 Release（可能只发预发布或未发版）",
+            "has_update": False,
+        }
+
+    tag = release["tag"]
+    marker = f"release:{tag}"
+    sp = state_path_for(name)
+    last = sp.read_text().strip() if sp.exists() else ""
+
+    # 首次使用 / 从提交模式切换过来：只记录基线
+    if not last.startswith("release:"):
+        log(f"[{name}] 首次使用正式版模式，记录基线: {tag}")
+        sp.write_text(marker)
+        send_serverchan(
+            f"✅ {name} 正式版监控已就绪",
+            f"将只在 **{upstream}** 发布正式版时提醒，当前最新正式版为 `{tag}`。",
+            config.get("serverchan", {}).get("sendkey", ""),
+        )
+        return {
+            "result": "first_run",
+            "message": f"已记录正式版基线 {tag}",
+            "has_update": False,
+            "sha": tag,
+        }
+
+    if last == marker:
+        log(f"[{name}] 无新正式版")
+        return {
+            "result": "no_update",
+            "message": f"无新正式版（{tag}）",
+            "has_update": False,
+            "sha": tag,
+        }
+
+    prev_tag = last[len("release:"):]
+    log(f"[{name}] 发现新正式版: {prev_tag} -> {tag}")
+    ai_text, ai_meta = ai_analyze_release(upstream, release, config.get("ai"))
+
+    title = f"🚀 {name} 发布 {tag}"
+    if ai_meta and ai_meta.get("suggestion") == "建议更新":
+        title = f"🟢 {name} {tag} 建议同步（{ai_meta.get('urgency','中')}）"
+    desp = build_release_message(repo_conf, release, ai_text, ai_meta)
+
+    push_ok = send_serverchan(title, desp, config.get("serverchan", {}).get("sendkey", ""))
+    sp.write_text(marker)
+    log(f"[{name}] 正式版处理完成")
+
+    detail = f"{prev_tag} → {tag}"
+    if ai_meta:
+        detail += f"，建议：{ai_meta.get('suggestion')}"
+    if not push_ok:
+        detail += "（推送未发送）"
+    return {
+        "result": "updated",
+        "message": detail,
+        "has_update": True,
+        "sha": tag,
+        "base": prev_tag,
+        "suggestion": (ai_meta or {}).get("suggestion"),
+        "urgency": (ai_meta or {}).get("urgency"),
+    }
+
+
+def check_commit_repo(repo_conf, config):
+    """监控分支上的任意新提交。"""
     name = repo_conf["name"]
     upstream = repo_conf["upstream"]
     branch = repo_conf.get("branch", "main")
@@ -475,16 +708,24 @@ def run_once(config=None, trigger="scheduled"):
 
 
 def next_run_at(config=None):
-    """根据上次检测时间与间隔推算下次检测时间。"""
+    """推算下次检测时间：优先使用每天固定时间，否则按间隔。"""
     st = load_status()
     last = parse_time(st.get("last_run_at", ""))
-    if last is None:
-        return None
     if config is None:
         try:
             config = load_config()
         except Exception:
             config = {}
+
+    daily = parse_daily_time(config.get("daily_time"))
+    if daily:
+        due = compute_daily_due(daily, last)
+        if due <= datetime.now():
+            return "即将执行"
+        return due.strftime("%Y-%m-%d %H:%M:%S")
+
+    if last is None:
+        return None
     try:
         interval = max(1, int(config.get("interval_hours", 24) or 24))
     except Exception:
@@ -505,16 +746,22 @@ def run_forever(stop_event=None):
             config = {}
         st = load_status()
         last = parse_time(st.get("last_run_at", ""))
-        try:
-            interval = max(1, int(config.get("interval_hours", 24) or 24))
-        except Exception:
-            interval = 24
 
-        if last is None:
-            wait_seconds = 0
+        daily = parse_daily_time(config.get("daily_time"))
+        if daily:
+            due = compute_daily_due(daily, last)
+            remain = (due - datetime.now()).total_seconds()
         else:
-            remain = (last + timedelta(hours=interval) - datetime.now()).total_seconds()
-            wait_seconds = 0 if remain <= 0 else min(60, remain)
+            try:
+                interval = max(1, int(config.get("interval_hours", 24) or 24))
+            except Exception:
+                interval = 24
+            if last is None:
+                remain = 0
+            else:
+                remain = (last + timedelta(hours=interval) - datetime.now()).total_seconds()
+
+        wait_seconds = 0 if remain <= 0 else min(60, remain)
 
         if wait_seconds <= 0:
             run_once(config, trigger="scheduled")
