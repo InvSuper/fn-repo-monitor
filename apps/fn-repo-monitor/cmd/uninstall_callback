@@ -1,0 +1,8 @@
+#!/bin/bash
+# 卸载后回调：按卸载向导选择决定是否清理数据
+APP_DIR="${TRIM_APPDEST:-$(cd "$(dirname "$0")/.." && pwd)}"
+DATA_DIR="${FN_MONITOR_DATA:-${TRIM_APPDATA:-/var/apps/${TRIM_APPNAME:-fn-repo-monitor}/var}}"
+if [ "$wizard_action" = "delete" ]; then
+    rm -rf "$DATA_DIR/state" "$DATA_DIR/config.json" "$DATA_DIR/monitor.log" "$DATA_DIR/monitor.stdout.log" "$DATA_DIR/monitor.pid" 2>/dev/null
+fi
+exit 0
