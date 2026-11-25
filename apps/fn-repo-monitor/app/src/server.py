@@ -24,7 +24,7 @@ import monitor
 
 MAX_BODY = 1024 * 1024  # 单次请求体上限 1MB
 STARTED_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-APP_VERSION = os.environ.get("TRIM_APPVER", "1.1.0")
+APP_VERSION = os.environ.get("TRIM_APPVER", "1.5.0")
 WEB_DIR = monitor.APP_DIR / "ui"
 STOP_EVENT = threading.Event()
 
@@ -88,11 +88,15 @@ def normalize_config(raw):
         watch = str(item.get("watch", "commit") or "commit").strip().lower()
         if watch not in ("commit", "release"):
             watch = "commit"
+        enabled = item.get("enabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() not in ("false", "0", "no", "off", "")
         normalized_repos.append({
             "name": name,
             "upstream": upstream,
             "branch": str(item.get("branch", "main")).strip() or "main",
             "watch": watch,
+            "enabled": bool(enabled),
             "keywords": [str(k).strip() for k in keywords if str(k).strip()],
             "build_url": str(item.get("build_url", "")).strip(),
         })
@@ -134,6 +138,7 @@ def build_status():
             "upstream": repo.get("upstream", ""),
             "branch": repo.get("branch", "main"),
             "watch": repo.get("watch", "commit"),
+            "enabled": repo.get("enabled", True) is not False,
             "baseline": read_baseline(name),
             "checking": bool(entry.get("checking")),
             "last_check_at": entry.get("last_check_at", ""),
@@ -289,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/repo/check":
             self._handle_repo_check()
             return
+        if path == "/api/repo/toggle":
+            self._handle_repo_toggle()
+            return
         if path == "/api/test-push":
             self._handle_test_push()
             return
@@ -320,6 +328,41 @@ class Handler(BaseHTTPRequestHandler):
         monitor.log("[配置] 已通过 Web 界面更新配置")
         self._json(200, {"saved": True, "config": config})
 
+    def _handle_repo_toggle(self):
+        try:
+            payload = self._read_json()
+        except Exception as e:
+            self._json(400, {"error": f"请求体解析失败: {e}"})
+            return
+        try:
+            config = monitor.load_config()
+        except Exception as e:
+            self._json(500, {"error": str(e)})
+            return
+
+        name = str(payload.get("name", "")).strip()
+        upstream = str(payload.get("upstream", "")).strip()
+        enabled = bool(payload.get("enabled", True))
+        target = None
+        for repo in config.get("repos", []):
+            if not isinstance(repo, dict):
+                continue
+            if repo.get("name", "") == name and (not upstream or repo.get("upstream", "") == upstream):
+                target = repo
+                break
+        if target is None:
+            self._json(404, {"error": "仓库配置已变化，请刷新页面后重试"})
+            return
+
+        target["enabled"] = enabled
+        try:
+            monitor.save_config(config)
+        except Exception as e:
+            self._json(500, {"error": f"保存配置失败: {e}"})
+            return
+        monitor.log(f"[{name}] 已{'启用' if enabled else '停用'}")
+        self._json(200, {"saved": True, "name": name, "enabled": enabled})
+
     def _handle_repo_check(self):
         try:
             payload = self._read_json()
@@ -342,6 +385,9 @@ class Handler(BaseHTTPRequestHandler):
                 break
         if target is None:
             self._json(404, {"error": "仓库配置已变化，请刷新页面后重试"})
+            return
+        if target.get("enabled") is False:
+            self._json(400, {"error": "该仓库已停用，请先启用再检测"})
             return
         if monitor.is_running():
             self._json(409, {"error": "已有一轮检测正在进行，请稍后再试"})

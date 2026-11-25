@@ -169,7 +169,9 @@ html, body {
 
 .repo-meta { font-size: 12px; color: var(--muted); text-align: right; }
 .repo-meta .update { color: var(--warning); font-weight: 600; }
-.repo-actions { display: flex; justify-content: flex-end; }
+.repo-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+.repo-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+.repo-toggle input { width: 14px; height: 14px; margin: 0; cursor: pointer; }
 
 .grid {
   display: grid;

@@ -44,6 +44,7 @@ function hideBanner() {
 }
 
 function statusBadge(repo) {
+  if (repo.enabled === false) return { cls: "idle", text: "已停用" };
   if (repo.checking) return { cls: "run", text: "检测中" };
   switch (repo.result) {
     case "no_update":
@@ -123,11 +124,24 @@ function renderRepoList(repos) {
 
     const actions = document.createElement("div");
     actions.className = "repo-actions";
+
+    const toggle = document.createElement("label");
+    toggle.className = "repo-toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = repo.enabled !== false;
+    checkbox.addEventListener("change", () => toggleRepo(repo, checkbox));
+    toggle.appendChild(checkbox);
+    const toggleText = document.createElement("span");
+    toggleText.textContent = checkbox.checked ? "启用" : "停用";
+    toggle.appendChild(toggleText);
+    actions.appendChild(toggle);
+
     const retry = document.createElement("button");
     retry.className = "btn small";
     retry.type = "button";
     retry.textContent = repo.checking ? "检测中…" : "重试";
-    retry.disabled = Boolean(repo.checking);
+    retry.disabled = Boolean(repo.checking) || repo.enabled === false;
     retry.addEventListener("click", () => retryRepo(repo, retry));
     actions.appendChild(retry);
     item.appendChild(actions);
@@ -221,6 +235,7 @@ function createSelect(labelText, value, dataField, options) {
 function addRepoRow(repo = {}) {
   const row = document.createElement("div");
   row.className = "repo-row";
+  row.dataset.enabled = repo.enabled === false ? "false" : "true";
 
   const head = document.createElement("div");
   head.className = "row-head";
@@ -301,11 +316,17 @@ function renderConfig(config) {
 function collectConfig() {
   const repos = Array.from(document.querySelectorAll("#repo-editor .repo-row")).map((row) => {
     const get = (field) => (row.querySelector(`[data-field="${field}"]`) || {}).value || "";
+    const name = get("name").trim();
+    const upstream = get("upstream").trim();
+    const known = (state.status && state.status.repos ? state.status.repos : []).find(
+      (item) => item.name === name && item.upstream === upstream
+    );
     return {
-      name: get("name").trim(),
-      upstream: get("upstream").trim(),
+      name,
+      upstream,
       branch: get("branch").trim() || "main",
       watch: get("watch") || "commit",
+      enabled: known ? known.enabled !== false : row.dataset.enabled !== "false",
       keywords: get("keywords")
         .split(/[,，]/)
         .map((k) => k.trim())
@@ -385,6 +406,23 @@ async function triggerCheck() {
   } catch (error) {
     showBanner("error", error.message);
     button.disabled = false;
+  }
+}
+
+async function toggleRepo(repo, checkbox) {
+  const enabled = checkbox.checked;
+  checkbox.disabled = true;
+  try {
+    await requestJson("api/repo/toggle", {
+      method: "POST",
+      body: JSON.stringify({ name: repo.name, upstream: repo.upstream, enabled }),
+    });
+    showBanner("ok", `已${enabled ? "启用" : "停用"}「${repo.name}」`);
+    await loadStatus();
+  } catch (error) {
+    checkbox.checked = !enabled;
+    checkbox.disabled = false;
+    showBanner("error", `切换失败：${error.message}`);
   }
 }
 

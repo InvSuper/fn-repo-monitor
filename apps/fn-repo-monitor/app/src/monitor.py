@@ -777,6 +777,9 @@ def run_once(config=None, trigger="scheduled"):
             if not isinstance(repo, dict):
                 continue
             name = repo.get("name") or repo.get("upstream", "?")
+            if repo.get("enabled") is False:
+                log(f"[{name}] 已停用，跳过检测")
+                continue
             status["repos"].setdefault(name, {})["checking"] = True
             save_status(status)
             try:
@@ -805,6 +808,8 @@ def run_once(config=None, trigger="scheduled"):
 
 def run_repo_once(repo, config=None):
     """单独重试一个仓库，与整轮检测共用锁。返回 (是否执行, 结果字典)。"""
+    if repo.get("enabled") is False:
+        return False, {"result": "error", "message": "该仓库已停用，请先启用再检测"}
     if not RUN_LOCK.acquire(blocking=False):
         log("已有一轮检测正在进行，跳过单仓库重试")
         return False, {"result": "error", "message": "已有一轮检测正在进行，请稍后再试"}
