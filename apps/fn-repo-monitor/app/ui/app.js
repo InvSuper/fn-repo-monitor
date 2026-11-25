@@ -437,6 +437,17 @@ function bindEvents() {
   $("btn-check").addEventListener("click", triggerCheck);
   $("btn-test").addEventListener("click", testPush);
   $("btn-test-ai").addEventListener("click", testAI);
+  document.querySelectorAll(".toggle-eye").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = $(button.dataset.target);
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.classList.toggle("active", show);
+      const label = show ? "隐藏" : "显示";
+      button.title = `${label} ${input.dataset.name || "密钥"}`;
+      button.setAttribute("aria-label", label);
+    });
+  });
   $("btn-log").addEventListener("click", loadLog);
   $("btn-add-repo").addEventListener("click", () => {
     addRepoRow();

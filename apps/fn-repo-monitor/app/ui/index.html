@@ -72,14 +72,24 @@
           <div class="field">
             <span>Server酱 SendKey</span>
             <div class="input-row">
-              <input id="cfg-sendkey" type="text" placeholder="sctp 或 SCT 开头">
+              <input id="cfg-sendkey" type="password" autocomplete="off" data-name="SendKey" placeholder="sctp 或 SCT 开头">
+              <button class="btn small icon-btn toggle-eye" type="button" data-target="cfg-sendkey" title="显示 SendKey" aria-label="显示 SendKey">
+                <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
               <button id="btn-test" class="btn small" type="button">测试推送</button>
             </div>
           </div>
-          <label class="field">
+          <div class="field">
             <span>GitHub Token（可选，提高限流额度）</span>
-            <input id="cfg-token" type="text" placeholder="ghp_…">
-          </label>
+            <div class="input-row">
+              <input id="cfg-token" type="password" autocomplete="off" data-name="GitHub Token" placeholder="ghp_…">
+              <button class="btn small icon-btn toggle-eye" type="button" data-target="cfg-token" title="显示 Token" aria-label="显示 GitHub Token">
+                <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="eye-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
         <p class="muted">固定检测时间留空时按间隔执行；填写后每天在该时刻检测（如 08:30），间隔设置不再生效。</p>
 
@@ -97,10 +107,16 @@
               <span>AI 接口地址</span>
               <input id="cfg-ai-base" type="text" placeholder="https://api.deepseek.com/v1">
             </label>
-            <label class="field">
+            <div class="field">
               <span>AI API Key</span>
-              <input id="cfg-ai-key" type="text" placeholder="留空则跳过解读">
-            </label>
+              <div class="input-row">
+                <input id="cfg-ai-key" type="password" autocomplete="off" data-name="AI API Key" placeholder="留空则跳过解读">
+                <button class="btn small icon-btn toggle-eye" type="button" data-target="cfg-ai-key" title="显示 API Key" aria-label="显示 AI API Key">
+                  <svg class="eye-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <svg class="eye-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </button>
+              </div>
+            </div>
             <label class="field">
               <span>模型名称</span>
               <input id="cfg-ai-model" type="text" placeholder="deepseek-chat">

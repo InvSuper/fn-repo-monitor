@@ -195,8 +195,14 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="time"]:focus, 
 }
 
 .input-row { display: flex; gap: 8px; }
-.input-row input { flex: 1; }
+.input-row input { flex: 1; min-width: 0; }
 .input-row .btn { flex: 0 0 auto; white-space: nowrap; }
+.input-row .icon-btn { padding: 6px 8px; color: var(--muted); }
+.input-row .icon-btn svg { width: 17px; height: 17px; display: block; pointer-events: none; }
+.input-row .icon-btn.active { color: var(--primary); }
+.input-row .icon-btn .eye-hide { display: none; }
+.input-row .icon-btn.active .eye-show { display: none; }
+.input-row .icon-btn.active .eye-hide { display: block; }
 
 .subsection { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border); }
 .subsection-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
