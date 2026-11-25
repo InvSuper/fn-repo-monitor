@@ -1,0 +1,7 @@
+﻿config.json
+state/
+monitor.log
+monitor.stdout.log
+monitor.pid
+*.pyc
+__pycache__/

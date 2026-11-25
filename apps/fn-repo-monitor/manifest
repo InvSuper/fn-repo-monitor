@@ -1,0 +1,15 @@
+appname               = fn-repo-monitor
+version               = 1.0.0
+display_name          = 仓库更新监控
+desc                  = 定时检测 GitHub 上游仓库（OpenWrt / mygo 等）更新，AI 解读变更并判断是否需要更新固件，推送到 Server酱，带手动编译跳转链接。
+changelog             = 首个版本：多仓库监控 + AI 解读 + Server酱推送
+platform              = x86
+source                = thirdparty
+maintainer            = InvSuper
+maintainer_url        = https://github.com/InvSuper
+distributor           = InvSuper
+distributor_url       = https://github.com/InvSuper
+ctl_stop              = true
+checkport             = false
+os_min_version        = 1.1.8
+disable_authorization_path=true

@@ -1,0 +1,43 @@
+#!/bin/bash
+# 飞牛应用生命周期：start / stop / status
+APP_DIR="$TRIM_APPDEST"
+PID_FILE="$APP_DIR/monitor.pid"
+PY="${PYTHON:-python3}"
+
+start() {
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "already running"
+        exit 0
+    fi
+    cd "$APP_DIR"
+    # 首次运行若没有 config.json，从 example 复制一份
+    if [ ! -f "$APP_DIR/config.json" ]; then
+        cp "$APP_DIR/config.json.example" "$APP_DIR/config.json" 2>/dev/null
+    fi
+    nohup "$PY" "$APP_DIR/src/monitor.py" >> "$APP_DIR/monitor.stdout.log" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "started pid $(cat "$PID_FILE")"
+    exit 0
+}
+
+stop() {
+    if [ -f "$PID_FILE" ]; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null
+        rm -f "$PID_FILE"
+    fi
+    exit 0
+}
+
+status() {
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+        exit 0
+    fi
+    exit 3
+}
+
+case "$1" in
+    start)  start  ;;
+    stop)   stop   ;;
+    status) status ;;
+    *)      exit 1 ;;
+esac

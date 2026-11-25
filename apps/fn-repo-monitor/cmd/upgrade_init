@@ -1,0 +1,8 @@
+#!/bin/bash
+# 升级前执行：保留用户的 config.json，不被覆盖
+APP_DIR="$TRIM_APPDEST"
+# 备份现有配置（升级后会保留在原位，这里仅确保不丢）
+if [ -f "$APP_DIR/config.json" ]; then
+    cp "$APP_DIR/config.json" "$APP_DIR/config.json.bak" 2>/dev/null
+fi
+exit 0

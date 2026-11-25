@@ -1,0 +1,49 @@
+name: Build fn-repo-monitor FPK
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install fnpack
+        run: |
+          curl -fsSL https://static2.fnnas.com/fnpack/fnpack-1.2.1-linux-amd64 -o fnpack
+          chmod +x fnpack
+          sudo mv fnpack /usr/local/bin/fnpack
+          fnpack --help || true
+
+      - name: Ensure Python scripts executable
+        run: |
+          chmod +x apps/fn-repo-monitor/cmd/*
+          chmod +x apps/fn-repo-monitor/app/src/monitor.py
+
+      - name: Build FPK
+        run: |
+          cd apps/fn-repo-monitor
+          fnpack build 2>&1 || { echo "fnpack build failed, trying without args"; fnpack --help; exit 1; }
+          ls -la *.fpk 2>/dev/null || find . -name '*.fpk'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fn-repo-monitor-fpk
+          path: apps/fn-repo-monitor/*.fpk
+          if-no-files-found: error
+
+      - name: Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/fn-repo-monitor/*.fpk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

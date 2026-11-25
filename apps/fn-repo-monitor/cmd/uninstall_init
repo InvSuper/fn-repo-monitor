@@ -1,0 +1,9 @@
+#!/bin/bash
+# 卸载前执行：停止进程
+APP_DIR="$TRIM_APPDEST"
+PID_FILE="$APP_DIR/monitor.pid"
+if [ -f "$PID_FILE" ]; then
+    kill "$(cat "$PID_FILE")" 2>/dev/null
+    rm -f "$PID_FILE"
+fi
+exit 0
