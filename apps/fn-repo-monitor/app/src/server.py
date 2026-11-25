@@ -286,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=monitor.run_once, args=(config, "manual"), daemon=True).start()
             self._json(200, {"started": True})
             return
+        if path == "/api/repo/check":
+            self._handle_repo_check()
+            return
         if path == "/api/test-push":
             self._handle_test_push()
             return
@@ -316,6 +319,36 @@ class Handler(BaseHTTPRequestHandler):
             return
         monitor.log("[配置] 已通过 Web 界面更新配置")
         self._json(200, {"saved": True, "config": config})
+
+    def _handle_repo_check(self):
+        try:
+            payload = self._read_json()
+        except Exception as e:
+            self._json(400, {"error": f"请求体解析失败: {e}"})
+            return
+        config = load_config_safe()
+        if config.get("_error"):
+            self._json(500, {"error": config["_error"]})
+            return
+
+        name = str(payload.get("name", "")).strip()
+        upstream = str(payload.get("upstream", "")).strip()
+        target = None
+        for repo in config.get("repos", []):
+            if not isinstance(repo, dict):
+                continue
+            if repo.get("name", "") == name and (not upstream or repo.get("upstream", "") == upstream):
+                target = repo
+                break
+        if target is None:
+            self._json(404, {"error": "仓库配置已变化，请刷新页面后重试"})
+            return
+        if monitor.is_running():
+            self._json(409, {"error": "已有一轮检测正在进行，请稍后再试"})
+            return
+
+        threading.Thread(target=monitor.run_repo_once, args=(target, config), daemon=True).start()
+        self._json(200, {"started": True, "name": target.get("name", "")})
 
     def _handle_test_ai(self):
         try:

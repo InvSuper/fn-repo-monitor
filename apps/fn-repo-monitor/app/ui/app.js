@@ -105,6 +105,7 @@ function renderRepoList(repos) {
     const mode = repo.watch === "release" ? "仅正式版" : "任意提交";
     const source = repo.watch === "release" ? repo.upstream : `${repo.upstream} @ ${repo.branch}`;
     sub.textContent = `${source} · ${mode} · 基线 ${formatBaseline(repo.baseline)}`;
+    sub.title = "基线是上次检测到的上游状态；首次检测只记录基线，之后与它比较才判断是否有更新";
 
     main.appendChild(nameRow);
     main.appendChild(sub);
@@ -119,6 +120,17 @@ function renderRepoList(repos) {
     meta.className = "repo-meta";
     meta.textContent = repo.last_check_at || "尚未检测";
     item.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "repo-actions";
+    const retry = document.createElement("button");
+    retry.className = "btn small";
+    retry.type = "button";
+    retry.textContent = repo.checking ? "检测中…" : "重试";
+    retry.disabled = Boolean(repo.checking);
+    retry.addEventListener("click", () => retryRepo(repo, retry));
+    actions.appendChild(retry);
+    item.appendChild(actions);
 
     container.appendChild(item);
   });
@@ -373,6 +385,47 @@ async function triggerCheck() {
   } catch (error) {
     showBanner("error", error.message);
     button.disabled = false;
+  }
+}
+
+async function retryRepo(repo, button) {
+  const before = repo.last_check_at || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "检测中…";
+  }
+  try {
+    await requestJson("api/repo/check", {
+      method: "POST",
+      body: JSON.stringify({ name: repo.name, upstream: repo.upstream }),
+    });
+    showBanner("ok", `已开始重新检测「${repo.name}」，完成后自动刷新。`);
+    stopPolling();
+    const startedAt = Date.now();
+    state.polling = setInterval(async () => {
+      await loadStatus();
+      const target = (state.status && state.status.repos ? state.status.repos : []).find(
+        (entry) => entry.name === repo.name
+      );
+      if (!target) {
+        stopPolling();
+        return;
+      }
+      const finished = !target.checking && (target.last_check_at !== before || Date.now() - startedAt > 4000);
+      if (finished) {
+        stopPolling();
+        await loadStatus();
+      } else if (Date.now() - startedAt > 60000) {
+        stopPolling();
+        showBanner("warn", "重试等待超时，请稍后刷新查看结果。");
+      }
+    }, 1500);
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "重试";
+    }
+    showBanner("error", `重试失败：${error.message}`);
   }
 }
 

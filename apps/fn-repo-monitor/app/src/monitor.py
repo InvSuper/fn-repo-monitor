@@ -8,6 +8,7 @@ GitHub仓库更新监控 (fn-repo-monitor)
 
 本模块既可作为命令行入口独立运行，也可被 server.py 导入复用。
 """
+import http.client
 import json
 import os
 import re
@@ -170,13 +171,33 @@ def save_config(config):
 
 
 def gh_api(url, token=None):
-    req = urllib.request.Request(url)
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("User-Agent", "fn-repo-monitor")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    """请求 GitHub API，网络中断或 5xx 时自动重试 2 次。"""
+    last_error = None
+    for attempt in range(3):
+        req = urllib.request.Request(url)
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("User-Agent", "fn-repo-monitor")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code >= 500 and attempt < 2:
+                wait = 2 * (attempt + 1)
+                log(f"[GitHub] 服务端错误 {e.code}，{wait} 秒后重试（{attempt + 1}/2）")
+                time.sleep(wait)
+                continue
+            raise
+        except (urllib.error.URLError, http.client.IncompleteRead, OSError) as e:
+            last_error = e
+            if attempt < 2:
+                wait = 2 * (attempt + 1)
+                log(f"[GitHub] 请求失败({e})，{wait} 秒后重试（{attempt + 1}/2）")
+                time.sleep(wait)
+                continue
+            raise
+    raise last_error
 
 
 def get_latest_commit(repo, branch, token=None):
@@ -780,6 +801,46 @@ def run_once(config=None, trigger="scheduled"):
         log("===== 本轮检测结束 =====")
         RUN_LOCK.release()
     return True
+
+
+def run_repo_once(repo, config=None):
+    """单独重试一个仓库，与整轮检测共用锁。返回 (是否执行, 结果字典)。"""
+    if not RUN_LOCK.acquire(blocking=False):
+        log("已有一轮检测正在进行，跳过单仓库重试")
+        return False, {"result": "error", "message": "已有一轮检测正在进行，请稍后再试"}
+
+    if config is None:
+        config = load_config()
+    name = repo.get("name") or repo.get("upstream", "?")
+
+    status = load_status()
+    status.setdefault("repos", {})
+    status["repos"].setdefault(name, {})["checking"] = True
+    save_status(status)
+
+    log(f"[{name}] 开始单仓库重试")
+    try:
+        try:
+            res = check_one(repo, config)
+        except Exception as e:
+            log(f"[{name}] 异常: {e}\n{traceback.format_exc()}")
+            res = {"result": "error", "message": f"检测异常: {e}", "has_update": False}
+
+        status = load_status()
+        entry = status["repos"].setdefault(name, {})
+        entry.pop("checking", None)
+        entry.update({
+            "name": name,
+            "upstream": repo.get("upstream", ""),
+            "branch": repo.get("branch", "main"),
+            "last_check_at": now_str(),
+        })
+        entry.update(res)
+        save_status(status)
+        log(f"[{name}] 单仓库重试结束: {res.get('message', '')}")
+        return True, res
+    finally:
+        RUN_LOCK.release()
 
 
 def next_run_at(config=None):

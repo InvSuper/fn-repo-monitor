@@ -141,7 +141,7 @@ html, body {
   border-radius: 8px;
   padding: 12px 14px;
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: center;
 }
@@ -169,6 +169,7 @@ html, body {
 
 .repo-meta { font-size: 12px; color: var(--muted); text-align: right; }
 .repo-meta .update { color: var(--warning); font-weight: 600; }
+.repo-actions { display: flex; justify-content: flex-end; }
 
 .grid {
   display: grid;
@@ -263,5 +264,6 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="time"]:focus, 
 @media (max-width: 720px) {
   .repo-item { grid-template-columns: 1fr; }
   .repo-meta { text-align: left; }
+  .repo-actions { justify-content: flex-start; }
   .app { padding: 14px 12px 40px; }
 }
