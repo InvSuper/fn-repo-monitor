@@ -245,6 +245,10 @@ def summarize_diff(compare, keywords):
     }
 
 
+class AIError(Exception):
+    """AI 接口调用失败，message 保留可直接展示给用户的原因。"""
+
+
 def _ai_available(ai_conf):
     return bool(ai_conf and ai_conf.get("enabled") and str(ai_conf.get("api_key", "")).strip())
 
@@ -275,11 +279,33 @@ def _call_ai(prompt, ai_conf):
     req.add_header("Authorization", f"Bearer {str(ai_conf.get('api_key', '')).strip()}")
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"].strip()
+            raw = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace").strip()
+        except Exception:
+            pass
+        message = f"HTTP {e.code} {e.reason}"
+        if detail:
+            message = f"{message}：{detail[:300]}"
+        log(f"[AI] 调用失败: {message}")
+        raise AIError(message)
+    except urllib.error.URLError as e:
+        message = f"网络连接失败：{e.reason}"
+        log(f"[AI] 调用失败: {message}")
+        raise AIError(message)
     except Exception as e:
-        log(f"[AI] 解读失败: {e}")
-        return None
+        message = f"{type(e).__name__}：{e}"
+        log(f"[AI] 调用失败: {message}")
+        raise AIError(message)
+
+    try:
+        data = json.loads(raw)
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log(f"[AI] 返回内容解析失败: {raw[:300]}")
+        raise AIError(f"返回内容解析失败：{e}")
 
 
 def ai_analyze(repo_name, summary, base, head, ai_conf):
@@ -314,7 +340,11 @@ def ai_analyze(repo_name, summary, base, head, ai_conf):
 紧迫度：<高|中|低>
 """
 
-    text = _call_ai(prompt, ai_conf)
+    text = None
+    try:
+        text = _call_ai(prompt, ai_conf)
+    except AIError:
+        return None, None
     if not text:
         return None, None
     return text, _parse_ai_meta(text)
@@ -345,7 +375,11 @@ def ai_analyze_release(repo_name, release, ai_conf):
 紧迫度：<高|中|低>
 """
 
-    text = _call_ai(prompt, ai_conf)
+    text = None
+    try:
+        text = _call_ai(prompt, ai_conf)
+    except AIError:
+        return None, None
     if not text:
         return None, None
     return text, _parse_ai_meta(text)
@@ -355,9 +389,21 @@ def test_ai_connection(ai_conf):
     """用一次最小请求验证 AI 接口是否可用，返回 (是否成功, 提示信息)。"""
     if not str((ai_conf or {}).get("api_key", "")).strip():
         return False, "请先填写 AI API Key"
-    text = _call_ai("这是一次连接测试。请只回复：AI 连接正常", ai_conf or {})
+    try:
+        text = _call_ai("这是一次连接测试。请只回复：AI 连接正常", ai_conf or {})
+    except AIError as e:
+        message = str(e)
+        if "HTTP 401" in message:
+            return False, f"API Key 无效或已失效（{message}）"
+        if "HTTP 402" in message:
+            return False, f"账户余额不足，需要先充值（{message}）"
+        if "HTTP 404" in message:
+            return False, f"接口地址或模型名称不正确（{message}）"
+        if "HTTP 429" in message:
+            return False, f"请求过于频繁或额度用尽，请稍后再试（{message}）"
+        return False, message
     if not text:
-        return False, "调用失败，请检查接口地址、API Key 和模型名称（详细原因见运行日志）"
+        return False, "接口返回了空内容"
     return True, text.strip()[:200]
 
 
