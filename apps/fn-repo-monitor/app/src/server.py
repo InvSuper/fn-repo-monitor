@@ -24,7 +24,7 @@ import monitor
 
 MAX_BODY = 1024 * 1024  # 单次请求体上限 1MB
 STARTED_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-APP_VERSION = os.environ.get("TRIM_APPVER", "1.6.0")
+APP_VERSION = os.environ.get("TRIM_APPVER", "1.6.1")
 WEB_DIR = monitor.APP_DIR / "ui"
 STOP_EVENT = threading.Event()
 

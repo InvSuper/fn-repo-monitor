@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GitHub仓库更新监控 (fn-repo-monitor)
+仓库更新监控 (fn-repo-monitor)
 - 定时检测多个 GitHub 仓库的更新（任意提交或仅正式版 Release）
 - AI 解读变更内容与影响，判断是否建议跟进
 - 推送到 Server酱，可附自定义跳转链接

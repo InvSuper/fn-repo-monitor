@@ -1,8 +1,8 @@
 appname               = fn-repo-monitor
-version               = 1.6.0
-display_name          = GitHub仓库更新监控
+version               = 1.6.1
+display_name          = 仓库更新监控
 desc                  = 定时检测 GitHub 仓库更新（任意提交或仅正式版 Release），AI 解读变更并判断是否建议跟进，推送到 Server酱，可附自定义跳转链接。
-changelog             = 正式版模式自动对比相邻 tag 的提交与文件；新增仅关键词命中时推送；AI 提示词支持关注关键词
+changelog             = 桌面显示名缩短为「仓库更新监控」，避免图标文字换行
 platform              = x86
 source                = thirdparty
 maintainer            = InvSuper
